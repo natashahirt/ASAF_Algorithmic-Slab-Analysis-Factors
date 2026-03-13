@@ -16,7 +16,7 @@ begin
     beam_sizers = [:discrete] #, :continuous]
 
     # Define the path to the JSON file containing slab geometry
-    main_path = "SlabDesignFactors/jsons/topology/"  # Update this path as needed
+    main_path = "Geometries/topology/"  # Update this path as needed
     sub_paths = filter(x -> endswith(x, ".json"), readdir(main_path))
 
     results_path = "SlabDesignFactors/results/test_results/"

@@ -5,7 +5,7 @@ Creates a multi-plot figure to visualize various slab design factors.
 """
 function plot_10_subplots(df_all; subplot::Symbol=:beam_sizer)
 
-    @assert subplot in [:beam_sizer, :slab_sizer, :collinearity, :max_depth, :slab_type] "Invalid subplot type. Must be one of :beam_sizer, :slab_sizer, :collinearity, :max_depth, :slab_type"
+    @assert subplot in [:beam_sizer, :slab_sizer, :collinearity, :max_depth, :slab_type, :slab_min] "Invalid subplot type. Must be one of :beam_sizer, :slab_sizer, :collinearity, :max_depth, :slab_type"
 
     fig = Figure(size=(190*4, 190*4))
 
@@ -99,11 +99,17 @@ function plot_10_subplots(df_all; subplot::Symbol=:beam_sizer)
             title = "Assembly depth"
             usual_label = "25\""
             optimal_label = "40\""
+        elseif subplot == :slab_min
+            df_usual = filter(row -> row.slab_min == true, df_all)
+            df_optimal = filter(row -> row.slab_min == false, df_all)
+            title = "Minimum slab depth"
+            usual_label = "0.125m"
+            optimal_label = "0.001m"
         end
 
         # Create axes and scatter plots
         create_scatter(scatter_ax, df_usual, df_optimal, xlabel="EC steel [kgCO2e/m²]", ylabel="EC RC-slab [kgCO2e/m²]")
-        axislegend(scatter_ax, [sk[:elem_usual], sk[:elem_optimal]], [usual_label, optimal_label], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize], patchsize=(2, 10), padding=(0, 0, 0, 0))
+        axislegend(scatter_ax, [sk[:elem_usual], sk[:elem_optimal]], [usual_label, optimal_label], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize], patchsize=(2, 10), padding=(0, 0, 0, 0))
 
         axis_x = Axis(grid_main[1, 1], limits=(0,150,nothing,nothing), height=25, title=title, titlesize=axis_kwargs[:titlesize])
         axis_y = Axis(grid_main[2, 2], limits=(nothing,nothing,0,150), width=25)
@@ -150,7 +156,7 @@ function plot_10_subplots(df_all; subplot::Symbol=:beam_sizer)
         points = [Point2f(isotropic_data.steel_ec[i], isotropic_data.slab_ec[i]) for i in hull]
         poly!(scatter_ax, points, color=(色[:skyblue], 0.05), transparency=true, strokewidth=0.5, strokecolor=色[:skyblue], linestyle=:dash)
 
-        axislegend(scatter_ax, [sk[:elem_isotropic], sk[:elem_orthogonal], sk[:elem_uniaxial]], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize], patchsize=(2, 10), padding=(0, 0, 0, 0))
+        axislegend(scatter_ax, [sk[:elem_isotropic], sk[:elem_orthogonal], sk[:elem_uniaxial]], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize], patchsize=(2, 10), padding=(0, 0, 0, 0))
 
         title = "Slab types"
 
@@ -175,7 +181,7 @@ function plot_10_subplots(df_all; subplot::Symbol=:beam_sizer)
         axis_x.xgridvisible = true
         axis_y.ygridvisible = true
 
-        steel_label_height = 6
+        steel_label_height = 1
 
     end
 

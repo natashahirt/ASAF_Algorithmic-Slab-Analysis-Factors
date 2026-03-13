@@ -18,7 +18,7 @@ begin
     results_name = "grid"
     
     # Define the path to the JSON file containing slab geometry
-    main_path = "SlabDesignFactors/jsons/grid/"  # Update this path as needed
+    main_path = "Geometries/grid/"  # Update this path as needed
     sub_paths = filter(x -> endswith(x, ".json"), readdir(main_path))
 
     # Define slab parameters

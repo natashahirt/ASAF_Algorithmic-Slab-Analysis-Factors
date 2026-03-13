@@ -1,3 +1,3 @@
-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/grid/ grid
-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/nova/ nova
-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/topology/ topology
+/home/nhirt/2024_Slab-Design-Factors/Geometries/grid/ grid
+/home/nhirt/2024_Slab-Design-Factors/Geometries/nova/ nova
+/home/nhirt/2024_Slab-Design-Factors/Geometries/topology/ topology

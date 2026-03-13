@@ -14,11 +14,13 @@
 *.3dm
 *.hdr
 *.csv
+*.json
 
 SlabDesignFactors/results/past_results
 SlabDesignFactors/results/test_results
 SlabDesignFactors/plot_figures/figures_raw*
 SlabDesignFactors/plot_figures/plotting_old
+Documentation/
 outputs/
 Manifest.toml
 Project.toml

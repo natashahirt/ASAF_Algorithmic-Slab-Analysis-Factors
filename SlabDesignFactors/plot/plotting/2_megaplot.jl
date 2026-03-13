@@ -70,10 +70,10 @@ function plot_2_megaplot(df_all)
     y_lim_max =150
     ax1 = Axis(scattergrid[1,1], xticks = collect(0:10:maximum(df_all.steel_ec)), title = "a) Full Dataset", aspect = DataAspect(), xlabel = "EC steel [kgCO2e/m²]", ylabel = "EC RC-slab [kgCO2e/m²]", limits=(0,x_lim_max,0,y_lim_max), yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize, titlesize = fontsize)
 
-    x_lim_min = minimum(less_than_bau.steel_ec) * .9
+    x_lim_min = minimum(less_than_bau.steel_ec) * .3
     y_lim_min = minimum(less_than_bau.slab_ec) * .9
 
-    ax2_limits = (x_lim_min,bau_steel * 1.1,y_lim_min,bau_slab*1.1)
+    ax2_limits = (x_lim_min,120,y_lim_min,bau_slab*1.1) #(x_lim_min,bau_steel * 1.1,y_lim_min,bau_slab*1.1)
     ax2 = Axis(gradient_grid[1,1], yticks = collect(0:10:bau_slab), aspect=DataAspect(), title = "b) Element density (inset)", xlabel = "EC steel [kgCO2e/m²]", ylabel = "EC RC-slab [kgCO2e/m²]", yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize, titlesize=fontsize, limits=ax2_limits)
     axislegend(ax1, [elem_t, elem_g, elem_s, elem_grey], ["Topology", "Grid", "Nova", "Non-standard"], position = :rb, orientation = :vertical, labelhalign = :right, framevisible = true, backgroundcolor= :white, framecolor = :white, labelsize=9, patchsize = (2,10), padding=(0,0,0,0))
     axislegend(ax2, [elem_g, elem_s], ["Grid", "Nova"], position = :rb, orientation = :vertical, labelhalign = :right, framevisible = true, backgroundcolor= :white, framecolor = :white, labelsize=9, patchsize = (2,10), padding=(2,2,2,2))
@@ -114,30 +114,37 @@ function plot_2_megaplot(df_all)
 
     # Plot less than
     filter_function = row -> row.category == "topology"
-    df_topology = filter(filter_function, less_than_bau_color)
+    df_topology = filter(filter_function, df_color)
     filter_function = row -> row.category == "grid"
-    df_grid = filter(filter_function, less_than_bau_color)
+    df_grid = filter(filter_function, df_color)
     filter_function = row -> row.category == "nova"
-    df_nova = filter(filter_function, less_than_bau_color)
+    df_nova = filter(filter_function, df_color)
 
-    scatter!(ax1, less_than_bau_grey.steel_ec, less_than_bau_grey.slab_ec, marker=less_than_bau_grey.symbol, rotation=less_than_bau_grey.rotation, color=(:lightgrey,alpha), transparency = false, markersize=markersize, inspector_label = (self, i, p) -> less_than_bau_grey.rowcol[i])
+    scatter!(ax1, df_grey.steel_ec, df_grey.slab_ec, marker=df_grey.symbol, rotation=df_grey.rotation, color=(:lightgrey,alpha), transparency = false, markersize=markersize, inspector_label = (self, i, p) -> df_grey.rowcol[i])
 
     scatter!(ax1, df_topology.steel_ec, df_topology.slab_ec, marker=df_topology.symbol, rotation=df_topology.rotation, color=(色[:magenta],alpha), transparency = transparency, markersize=markersize, inspector_label = (self, i, p) -> df_topology.rowcol[i])
     scatter!(ax1, df_grid.steel_ec, df_grid.slab_ec, marker=df_grid.symbol, rotation=df_grid.rotation, color=(色[:lilac],alpha), transparency = transparency, markersize=markersize, inspector_label = (self, i, p) -> df_grid.rowcol[i])
     scatter!(ax1, df_nova.steel_ec, df_nova.slab_ec, marker=df_nova.symbol, rotation=df_nova.rotation, color=(:navy,alpha), transparency = transparency, markersize=markersize, inspector_label = (self, i, p) -> df_nova.rowcol[i])
 
     # Plot the same on ax2
-    #scatter!(ax2, less_than_bau_grey.steel_ec, less_than_bau_grey.slab_ec, marker=less_than_bau_grey.symbol, rotation=less_than_bau_grey.rotation, color=(:lightgrey,alpha), transparency = false, markersize=markersize_zoom, inspectable = false)
+    scatter!(ax2, less_than_bau_grey.steel_ec, less_than_bau_grey.slab_ec, marker=less_than_bau_grey.symbol, rotation=less_than_bau_grey.rotation, color=(:lightgrey,alpha), transparency = false, markersize=markersize_zoom, inspectable = false)
     scatter!(ax2, df_topology.steel_ec, df_topology.slab_ec, marker=df_topology.symbol, rotation=df_topology.rotation, color=(:lightgrey,alpha), transparency = false, markersize=markersize_zoom, inspector_label = (self, i, p) -> df_topology.rowcol[i])
 
     n_elements_grid = [length(df_grid[i,:].ids) for i in 1:lastindex(df_grid.name)]
     n_elements_nova = [length(df_nova[i,:].ids) for i in 1:lastindex(df_nova.name)]
 
-    scatter!(ax2, df_grid.steel_ec, df_grid.slab_ec, marker=df_grid.symbol, rotation=df_grid.rotation, color = n_elements_grid, colormap = Reverse(:acton), colorrange = (0,maximum(n_elements_nova)), transparency = false, markersize=markersize_zoom, inspector_label = (self, i, p) -> df_grid.rowcol[i])
-    scatter!(ax2, df_nova.steel_ec, df_nova.slab_ec, marker=df_nova.symbol, rotation=df_nova.rotation, color = n_elements_nova, colormap = Reverse(:devon), colorrange = (0,maximum(n_elements_nova)), transparency = false, markersize=markersize_zoom, inspector_label = (self, i, p) -> df_nova.rowcol[i])
-
-    Colorbar(gradient_grid[1,2], limits = (0, maximum(n_elements_nova)), colormap = Reverse(:acton), ticklabelsize=smallfontsize, labelsize=smallfontsize, label="# grid elements", ticklabelrotation=pi/2)
-    Colorbar(gradient_grid[1,3], limits = (0, maximum(n_elements_nova)), colormap = Reverse(:devon), ticklabelsize=smallfontsize, labelsize=smallfontsize, label="# nova elements", ticklabelrotation=pi/2)
+    try
+        scatter!(ax2, df_grid.steel_ec, df_grid.slab_ec, marker=df_grid.symbol, rotation=df_grid.rotation, color = n_elements_grid, colormap = Reverse(:acton), colorrange = (0,maximum(n_elements_nova)), transparency = false, markersize=markersize_zoom, inspector_label = (self, i, p) -> df_grid.rowcol[i])
+        Colorbar(gradient_grid[1,2], limits = (0, maximum(n_elements_nova)), colormap = Reverse(:acton), ticklabelsize=smallfontsize, labelsize=smallfontsize, label="# grid elements", ticklabelrotation=pi/2)
+    catch
+        println("Error plotting grid elements")
+    end
+    try
+        scatter!(ax2, df_nova.steel_ec, df_nova.slab_ec, marker=df_nova.symbol, rotation=df_nova.rotation, color = n_elements_nova, colormap = Reverse(:devon), colorrange = (0,maximum(n_elements_nova)), transparency = false, markersize=markersize_zoom, inspector_label = (self, i, p) -> df_nova.rowcol[i])
+        Colorbar(gradient_grid[1,3], limits = (0, maximum(n_elements_nova)), colormap = Reverse(:devon), ticklabelsize=smallfontsize, labelsize=smallfontsize, label="# nova elements", ticklabelrotation=pi/2)
+    catch
+        println("Error plotting nova elements")
+    end
 
     # Plot business as usual
     scatter!(ax1, bau_steel, bau_slab, marker=business_as_usual.symbol, transparency = transparency, markersize=markersize, rotation=business_as_usual.rotation, color=:black, inspector_label = (self, i, p) -> business_as_usual.rowcol[i])

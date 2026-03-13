@@ -2,12 +2,10 @@ function plot_9_stats_topology(df_all)
 
     df_all = filter(row -> row.category == "topology", df_all)
 
-    filter_bau = row -> row.name == "r1c2" && row.slab_type == "uniaxial" && row.slab_sizer == "uniform" && row.beam_sizer == "discrete" && row.collinear == true && row.vector_1d_x == 1 && row.vector_1d_y == 0 && row.max_depth == 40
-    df_below_bau = filter(row -> row.total_ec < filter(filter_bau,df_all).total_ec[1], df_all)
-    
+    filter_bau = row -> row.name == "r1c2" && row.slab_type == "uniaxial" && row.slab_sizer == "uniform" && row.beam_sizer == "discrete" && row.collinear == true && row.vector_1d_x == 1 && row.vector_1d_y == 0 && row.max_depth == 40 && row.slab_min == true
     df_filtered = filter(filter_bau, df_all)
-
-    bau = filter(filter_bau,df_all).total_ec[1] # business as usual
+    bau_total_ec = df_filtered.total_ec[1]
+    df_below_bau = filter(row -> row.total_ec < bau_total_ec, df_all)
 
     colors = [色[:magenta], 色[:skyblue], 色[:charcoalgrey]]
     fontsize = 11
@@ -27,10 +25,15 @@ function plot_9_stats_topology(df_all)
         Label(grid[0, :], text = texts[k], fontsize = fontsize, font = :bold, tellwidth = false)
         df_plot = df_considered
         
-        ax1 = Axis(grid[1,1], title = "Total", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,150), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
-        ax2 = Axis(grid[2,1], title = "Steel", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,150), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
-        ax3 = Axis(grid[3,1], title = "Slab", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,150), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
+        ax1 = Axis(grid[1,1], title = "Total", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,200), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
+        ax2 = Axis(grid[2,1], title = "Steel", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,200), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
+        ax3 = Axis(grid[3,1], title = "Slab", ylabel = "EC [kgCO2e/m²]", xticks = (1:lastindex(names), labels), limits = (nothing,nothing,0,200), titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = smallfontsize, xlabelsize = fontsize, ylabelsize = fontsize, xticklabelrotation=pi/2)
 
+        # Add horizontal line at business-as-usual total EC level
+        hlines!(ax1, bau_total_ec, color=:black, linestyle=:dash, linewidth=1)
+        hlines!(ax2, bau_total_ec, color=:black, linestyle=:dash, linewidth=1) 
+        hlines!(ax3, bau_total_ec, color=:black, linestyle=:dash, linewidth=1)
+        
         for (i, name) in enumerate(names)
             
             df_data = filter(row -> row.rowcol == name, df_plot)

@@ -48,8 +48,8 @@ function plot_3_topology(df; category=nothing)
     sort!(df_worst, order(:best_total_ec))
 
     if !isnothing(category)
-        df_best.rowcol = replace.(df_best.rowcol, category => "")
-        df_worst.rowcol = replace.(df_worst.rowcol, category => "")
+        df_best.rowcol = replace.(df_best.rowcol, category => "t")
+        df_worst.rowcol = replace.(df_worst.rowcol, category => "t")
     end
 
     # Create figure
@@ -88,20 +88,22 @@ function plot_3_topology(df; category=nothing)
     best_topologies = df_best[1:3,:]
     worst_topologies = df_best[length(df_best.name) - 2:end,:]
 
+    println(worst_topologies)
+
     topology_names = vcat(best_topologies.name, worst_topologies.name)
     topology_rowcol = vcat(best_topologies.rowcol, worst_topologies.rowcol)
 
     for i in 1:6
         ax_topologies = Axis(grid_topologies[1,i], aspect=DataAspect())
 
-        path = "SlabDesignFactors/jsons/$category/$(topology_names[i]).json"
+        path = "Geometries/$category/$(topology_names[i]).json"
         geometry_dict = JSON.parse(JSON.parse(replace(read(path, String), "\\n" => ""), dicttype=Dict))
         geometry = generate_from_json(geometry_dict, plot=false, drawn=true);
 
         plot_elements!(ax_topologies, geometry.elements, linewidth=1)
         
         if !isnothing(category)
-            xlabel = replace(topology_rowcol[i], category => "")
+            xlabel = replace(topology_rowcol[i], category => "t")
         else
             xlabel = topology_names[i]
         end

@@ -14,7 +14,7 @@ function plot_6_depth(df)
     elem_continuous = MarkerElement(color = 色[:magenta], marker = :star8)
 
     fig = Figure(size=(190*4,190*2))
-    ax = Axis(fig[1,1], title="Maximum depths", xlabel = "Maximum assembly depth [in]", ylabel = "EC [kgCO2e/m²]", limits = (0,60,0,nothing), topspinevisible=false, rightspinevisible=false, xticks = (0:10:60, ["0", "10", "20", "30", "40", "50", "∞"]), yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize, titlesize=fontsize)
+    ax = Axis(fig[1,1], title="Maximum depths", xlabel = "Maximum assembly depth [in]", ylabel = "Steel EC [kgCO2e/m²]", limits = (0,60,0,nothing), topspinevisible=false, rightspinevisible=false, xticks = (0:10:60, ["0", "10", "20", "30", "40", "50", "∞"]), yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize, titlesize=fontsize)
 
     for i in 1:lastindex(beam_sizers)
 
@@ -28,8 +28,9 @@ function plot_6_depth(df)
             
             for depth in depths
                 filtered_slab = filter(row -> row.name == name && row.slab_sizer == slab_sizer && row.max_depth == depth && row.collinear == collinear && row.beam_sizer == beam_sizer, df)
-                if length(filtered_slab.name) != 1; push!(y, NaN); continue; end
-                push!(y, filtered_slab.total_ec[1])
+                if length(filtered_slab.name) == 0; push!(y, NaN); continue; end
+                push!(y, filtered_slab.steel_ec[1])
+                #push!(y, min(filtered_slab.steel_ec[1], minimum(filter(!isnan, y))))
             end
 
             lines!(ax, depths, y, color = color, alpha=alpha, transparency=true)

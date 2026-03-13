@@ -32,7 +32,10 @@ function reset_SlabAnalysisParams(self::SlabAnalysisParams, model::Asap.Model; p
         slab_depths=self.slab_depths,
         plot_analysis=self.plot_context.plot,
         load_dictionary=self.load_dictionary,
+        trib_dictionary=self.trib_dictionary,
         slab_units=self.slab_units,
+        i_holes=self.i_holes,
+        i_perimeter=self.i_perimeter,
     )
 end
 

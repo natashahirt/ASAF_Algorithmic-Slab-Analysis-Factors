@@ -89,7 +89,7 @@ function plot_1_multiplot(df_all)
     create_scatter(ax3, filter(row -> row.collinear == true, df_all), filter(row -> row.collinear == false, df_all), title="c) Beam collinearity", xlabel="EC steel [kgCO2e/m²]", ylabel="EC RC-slab [kgCO2e/m²]")
 
     ax4 = Axis(grid_subplots[2, 2]; axis_kwargs...)
-    create_scatter(ax4, filter(row -> row.max_depth == 25, df_all), filter(row -> row.max_depth == 40, df_all), title="d) Assembly depth", xlabel="EC steel [kgCO2e/m²]")
+    create_scatter(ax4, filter(row -> row.slab_min == true, df_all), filter(row -> row.slab_min == false, df_all), title="d) Minimum slab depth", xlabel="EC steel [kgCO2e/m²]")
 
     ax5 = Axis(grid_slabtype[1, 1]; axis_kwargs...)
     isotropic_data = filter(row -> row.slab_type == "isotropic", df_all)
@@ -116,11 +116,11 @@ function plot_1_multiplot(df_all)
 
 
     # Add legends
-    axislegend(ax1, [sk[:elem_usual], sk[:elem_optimal]], ["Uniform", "Cellular"], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
-    axislegend(ax2, [sk[:elem_usual], sk[:elem_optimal]], ["Catalog (W)", "Continuous"], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
-    axislegend(ax3, [sk[:elem_usual], sk[:elem_optimal]], ["Collinear", "Noncollinear"], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
-    axislegend(ax4, [sk[:elem_usual], sk[:elem_optimal]], ["25\"", "40\""], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
-    axislegend(ax5, [sk[:elem_isotropic], sk[:elem_orthogonal], sk[:elem_uniaxial]], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position=:cb, orientation=:horizontal, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
+    axislegend(ax1, [sk[:elem_usual], sk[:elem_optimal]], ["Uniform", "Cellular"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=(:white, 0), framecolor=(:white, 0), labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
+    axislegend(ax2, [sk[:elem_usual], sk[:elem_optimal]], ["Catalog (W)", "Continuous"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
+    axislegend(ax3, [sk[:elem_usual], sk[:elem_optimal]], ["Collinear", "Noncollinear"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
+    axislegend(ax4, [sk[:elem_usual], sk[:elem_optimal]], ["0.125m", "0.001m"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
+    axislegend(ax5, [sk[:elem_isotropic], sk[:elem_orthogonal], sk[:elem_uniaxial]], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position=:rt, orientation=:vertical, labelhalign=:left, framevisible=true, backgroundcolor=:white, framecolor=:white, labelsize=sk[:fontsize_small], patchsize=(2, 10), padding=(0, 0, 0, 0))
 
     # Find the business-as-usual (BAU) scenario
     bau_filter = row -> row.name == "r1c2" && row.slab_type == "uniaxial" && row.slab_sizer == "uniform" && row.beam_sizer == "discrete" && row.collinear == true && row.vector_1d_x == 1 && row.vector_1d_y == 0 && row.max_depth == 40
@@ -137,7 +137,7 @@ function plot_1_multiplot(df_all)
         lines!(ax, [bau_total, 0], [0, bau_total], color=:black, linestyle=:dash, transparency=true, linewidth=1)
         if ax == ax5
             text!(ax, 149, bau_slab[1] + 1, text="BAU slab", color = :black, align = (:right, :bottom), fontsize = sk[:fontsize_small])
-            text!(ax, bau_steel[1] + 3, 12, text="BAU steel", color = :black, rotation = pi/2, align = (:left, :center), fontsize = sk[:fontsize_small])
+            text!(ax, bau_steel[1] + 3, 1, text="BAU steel", color = :black, rotation = pi/2, align = (:left, :center), fontsize = sk[:fontsize_small])
             text!(ax, 3, bau_slab[1]+bau_steel[1]+1, text="BAU total", color = :black, rotation=-pi/4, align = (:left, :center), fontsize = sk[:fontsize_small])    
         end
     end

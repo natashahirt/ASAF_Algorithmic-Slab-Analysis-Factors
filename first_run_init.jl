@@ -13,10 +13,13 @@ Pkg.add("Colors")
 Pkg.add("CSV")
 Pkg.add("DataFrames")
 Pkg.add("GLMakie")
+Pkg.add("HTTP")
 Pkg.add("Interpolations")
 Pkg.add("JSON")
 Pkg.add("LinearSolve");
 Pkg.add("Nonconvex")
+Pkg.add("Revise")
+Pkg.add("Sockets")
 Pkg.add("Statistics")
 Pkg.add("StatsBase")
 Pkg.add("UnPack")
@@ -29,3 +32,6 @@ Pkg.develop(path="./AsapOptim")
 # Resolve and precompile packages
 Pkg.resolve()
 Pkg.precompile()
+
+# Instantiate the project
+Pkg.instantiate()

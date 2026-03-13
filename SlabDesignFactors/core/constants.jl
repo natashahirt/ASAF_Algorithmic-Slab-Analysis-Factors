@@ -15,3 +15,6 @@ const ρ_REBAR_KIPIN3 = kgm3_to_kipin3(ρ_REBAR)
 const ECC_STEEL = 1.22
 const ECC_CONCRETE = 0.152 # from CLF
 const ECC_REBAR = 0.854
+
+# Big M
+const BIG_M = 1e9

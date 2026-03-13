@@ -23,7 +23,7 @@ function plot_4_surface(df; category::String="grid")
 
     azimuth = π/4 #1.275π - π
     
-    filter_function = row -> row.slab_sizer == "uniform" && row.collinear == false && row.beam_sizer == "discrete" && row.max_depth == 25 && row.slab_type == "isotropic"
+    filter_function = row -> row.slab_sizer == "uniform" && row.collinear == true && row.beam_sizer == "discrete" && row.max_depth == 40 && row.slab_type == "isotropic"
     df = filter(filter_function, df_master)
     x = unique_x
     y = unique_y
@@ -191,7 +191,7 @@ function plot_4_surface(df; category::String="grid")
                 ax.yticksvisible = false
             end        
 
-            filter_function = row -> row.slab_sizer == slab_sizer && row.slab_type == slab_type && row.vector_1d_x == vector_1d[1] && row.vector_1d_y == vector_1d[2] && row.collinear == false && row.beam_sizer == "discrete" && row.max_depth == 25
+            filter_function = row -> row.slab_sizer == slab_sizer && row.slab_type == slab_type && row.vector_1d_x == vector_1d[1] && row.vector_1d_y == vector_1d[2] && row.collinear == true && row.beam_sizer == "discrete" && row.max_depth == 40
             df_smallmul = filter(filter_function, df_master)
 
             df_smallmul = add_missing_rows(df_smallmul, unique_x, unique_y, maximum_ec)

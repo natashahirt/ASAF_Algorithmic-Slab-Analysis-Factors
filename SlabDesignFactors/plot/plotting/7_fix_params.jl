@@ -3,8 +3,8 @@ function plot_7_fix_params(df_fixed, df_unfixed)
     max_axis = 150
     fontsize = 11
 
-    fig = Figure(size=(190*3,190*3))
-    ax = Axis(fig[1,1], aspect=1, xlabel = "Fixed tributaries EC [kgCO2e/m²]", ylabel = "Stiffness-adjusted tributaries EC [kgCO2e/m²]",limits=(0,max_axis,0,max_axis),titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize)
+    fig = Figure(size=(190*4*.7,190*4*.7))
+    ax = Axis(fig[1,1], aspect=1, xlabel = "Bisector method EC [kgCO2e/m²]", ylabel = "Stiffness-weighted method EC [kgCO2e/m²]",limits=(0,max_axis,0,max_axis),titlesize = fontsize, yticklabelsize = fontsize, xticklabelsize = fontsize, xlabelsize = fontsize, ylabelsize = fontsize)
 
     slab_types = ["isotropic", "orth_biaxial", "orth_biaxial", "uniaxial", "uniaxial", "uniaxial", "uniaxial"]
     vector_1ds = [[0.,0.], [1.,0.], [1.,1.], [1.,0.], [0.,1.], [1.,1.], [1.,-1.]]
@@ -43,7 +43,7 @@ function plot_7_fix_params(df_fixed, df_unfixed)
     elem_orthogonal = MarkerElement(color = 色[:irispurple], marker = :cross)
     elem_uniaxial = MarkerElement(color = 色[:magenta], marker = :hline)
 
-    axislegend(ax, [elem_isotropic, elem_orthogonal, elem_uniaxial], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position = :rb, orientation = :vertical, labelhalign = :right, framevisible = true, backgroundcolor= :white, framecolor = :white, labelsize=9, patchsize = (2,10), padding=(2,2,2,2))
+    axislegend(ax, [elem_isotropic, elem_orthogonal, elem_uniaxial], ["Isotropic", "Biaxial Orthogonal", "Uniaxial"], position = :rb, orientation = :vertical, labelhalign = :right, framevisible = true, backgroundcolor= :white, framecolor = :white, labelsize=fontsize, patchsize = (2,10), padding=(2,2,2,2))
 
     display(fig)
 
