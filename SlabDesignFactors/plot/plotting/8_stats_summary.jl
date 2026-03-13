@@ -115,7 +115,7 @@ function create_slab_summary_table(df)
 
     for slab_name in slab_names
         df_slab = filter(row -> row.name == slab_name, df)
-        df_slab_drawn = filter(row -> row.name == slab_name * "_drawn" in df.name, df)
+        df_slab_drawn = filter(row -> row.name == slab_name * "_drawn", df)
         
         # Get mean values for standard slab
         mean_steel_ec = mean(df_slab.steel_ec)

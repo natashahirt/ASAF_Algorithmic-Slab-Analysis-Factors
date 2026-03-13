@@ -57,7 +57,7 @@ function plot_5_beam_sizes(df_input::DataFrame; category=nothing)
         # Sort and filter for top 25% by percent
         sort!(df_names, [:percent], rev=true)
         top_50_percent_index = Int(ceil(0.5 * nrow(df_names)))
-        df_names = df_names[1:70, :]
+        df_names = df_names[1:min(70, nrow(df_names)), :]
 
         sort!(df_names, [:mass, :depth])
     end
@@ -232,28 +232,28 @@ function plot_5_beam_sizes_topology(df_input::DataFrame)
             # Sort and filter for top 25% by percent
             sort!(df_names, [:percent], rev=true)
             #top_50_percent_index = Int(ceil(0.5 * nrow(df_names)))
-            df_names = df_names[1:35, :]
+            df_names = df_names[1:min(35, nrow(df_names)), :]
 
             sort!(df_names, [:mass, :depth])
         end
 
-        # Assign categories to names
+        # Assign category ids to names
         seen = String[]
-        categories = Int64[]
+        cat_ids = Int64[]
         category_dict = Dict()
 
         for name in df_names.name
             if name in seen
-                push!(categories, findfirst(x -> x == name, seen))
+                push!(cat_ids, findfirst(x -> x == name, seen))
             else
-                new_category = isempty(categories) ? 1 : maximum(categories) + 1
-                push!(categories, new_category)
+                new_category = isempty(cat_ids) ? 1 : maximum(cat_ids) + 1
+                push!(cat_ids, new_category)
                 push!(seen, name)
                 category_dict[new_category] = name
             end
         end
 
-        df_names.category .= categories
+        df_names.category .= cat_ids
 
         # Create axes for the plots
         ax = Axis(grid[tuples[i][1], tuples[i][2]], 

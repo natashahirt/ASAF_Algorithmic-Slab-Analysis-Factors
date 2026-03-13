@@ -79,7 +79,7 @@ save(save_path * "7_fix_params.pdf", fig)
 fig = plot_8_stats_summary(df_combined)
 save(save_path * "8_stats_summary.pdf", fig)
 
-print_8_stats_summary(df_combined)
+create_summary_tables(df_combined)
 
 fig = plot_9_stats_topology(df_combined)
 save(save_path * "9_stats_topology.pdf", fig)
@@ -180,7 +180,7 @@ catch
         live_factor=1.6, # -
         dead_factor=1.2, # -
         beam_sizer=Symbol(test_result.beam_sizer),
-        max_depth=Symbol(test_result.max_depth), # in
+        max_depth=Real(test_result.max_depth), # in
         beam_units=:in, # in, etc.
         serviceability_lim=360,
         collinear=Bool(test_result.collinear),
@@ -274,7 +274,7 @@ closest_sections = String[]
 for i in 1:lastindex(depths)
     closest_section = find_closest_section(depths[i], weights[i], available_sections)
     if isnothing(closest_section)
-        println(row.depth, " ", row.weight)
+        println(depths[i], " ", weights[i])
     end
     push!(closest_sections, closest_section.name)
 end

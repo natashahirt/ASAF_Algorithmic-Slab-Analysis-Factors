@@ -12,7 +12,7 @@ function analyze_experiments(results_path::String, completion_file::String)
     println("Dependencies loaded successfully.")
 
     # Read parameters from file
-    json_path = "/home/nhirt/2024_Slab-Design-Factors/Geometries/topology/"
+    json_path = "/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/topology/"
 
     experiment_max_depths = Dict(
         :results_name => "max_depths",

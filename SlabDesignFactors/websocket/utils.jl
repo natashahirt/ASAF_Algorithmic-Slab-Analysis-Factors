@@ -7,13 +7,13 @@ function start_websocket()
         return
     end
     
-    server_ref[] = WebSockets.listen!("127.0.0.1", 2000) do ws
+    server_ref[] = HTTP.WebSockets.listen!("127.0.0.1", 2000) do ws
         for msg in ws
             if msg == "init"
                 continue
             end
             line_coordinates = get_tributary_lines(msg)
-            WebSockets.send(ws, line_coordinates)
+            HTTP.WebSockets.send(ws, line_coordinates)
             println("Sent")
         end
     end

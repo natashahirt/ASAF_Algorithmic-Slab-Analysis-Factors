@@ -244,11 +244,7 @@ function make_heatmap(ax, df_smallmul, minimum_ec, maximum_ec, markersize)
     y2_extrap = range(minimum(y)-0.5, maximum(y)+0.5, length=length(y)*resolution)
     z2_extrap = [interp(x, y) for x in x2_extrap, y in y2_extrap]
 
-    for z in z2_extrap
-        if z > maximum_ec
-            z = NaN
-        end
-    end
+    z2_extrap[z2_extrap .> maximum_ec] .= NaN
 
     n_contours = 10
 

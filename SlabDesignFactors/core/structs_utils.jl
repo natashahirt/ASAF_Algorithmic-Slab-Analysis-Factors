@@ -68,12 +68,15 @@ function reset_SlabSizingParams(self::SlabSizingParams)
         x_maxs=Float64[],
         load_dictionary=self.load_dictionary,
         load_df=self.load_df,
-        minimizers=Vector{Vector}(),
+        minimizers=Vector{Float64}[],
         minimums=Float64[],
         ids=String[],
-        collinear_minimizers=Vector{Vector}(),
+        collinear_minimizers=Vector{Float64}[],
         collinear_ids=String[],
         collinear_minimums=Float64[],
+        composite_action=self.composite_action,
+        E_c=self.E_c,
+        slab_depth_in=self.slab_depth_in,
         verbose=self.verbose
     )
 end

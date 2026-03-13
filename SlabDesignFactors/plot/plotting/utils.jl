@@ -18,17 +18,7 @@ cull(x) = (x isa Number && x == 0.) ? NaN : x
 # EXTRACT THE ROTATION OF THE SYMBOL
 function get_vector_1d_angle(vector_1d::Vector{<:Real}; degrees=false, clockwise=false)
 
-    angle = atan(vector_1d[2], vector_1d[1]) # counterclockwise
-
-    if vector_1d[1] < 0 && vector_1d[2] >= 0
-        angle += pi
-    elseif vector_1d[1] < 0 && vector_1d[2] < 0
-        angle -= pi
-    elseif vector_1d[1] == 0 && vector_1d[2] > 0
-        angle = pi/2
-    elseif vector_1d[1] == 0 && vector_1d[2] < 0
-        angle = -pi/2
-    end
+    angle = atan(vector_1d[2], vector_1d[1])
  
     if clockwise == true
         if angle < 0

@@ -38,12 +38,12 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
     spacing::Float64               # Density of sampling [-]
     area::Float64                  # Sum area of slab [-²]
     areas::Vector{<:Real}         # Areas of each cell [-²]
-    load_areas::Vector{<:Real}      # Area of strips [-³]
+    load_areas::Vector{<:Real}      # Area of strips [-²]
     load_volumes::Vector{<:Real}    # Volume of strips [-³]
     max_spans::Vector{<:Real}     # Spans of each cell [-]
     slab_depths::Vector{<:Real}   # Depth of each cell [-]
     plot_context::PlotContext      # Plot context
-    load_dictionary::Dict{Any, Vector{Asap.AbstractLoad}}  # Dictionary comparing elements to loads
+    load_dictionary::Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}  # Dictionary comparing elements to loads
     trib_dictionary::Dict{Any, Any}  # Dictionary mapping elements to vector of coordinate tuples
     record_tributaries::Bool            # Whether to record lines
     slab_units::Symbol              # Unit of measurement for slab (:m, :mm, :in, :ft)
@@ -70,7 +70,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
                               max_spans::Vector{<:Real}=Float64[],
                               slab_depths::Vector{<:Real}=Float64[],
                               plot_analysis::Bool=false,
-                              load_dictionary::Dict{Any, Vector{Asap.AbstractLoad}}=Dict{Any, Vector{Asap.AbstractLoad}}(),
+                              load_dictionary::Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}=Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}(),
                               trib_dictionary::Dict{Any, Any}=Dict{Any, Any}(),
                               record_tributaries::Bool=false,
                               slab_units::Symbol=:m,
@@ -120,7 +120,7 @@ mutable struct SlabSizingParams
     drawn::Bool                      # True if the model has been drawn
     element_ids::Vector{Int64}      # Element ids
     serviceability_lim::Real       # Divide length by limit to get serviceability
-    catalog_discrete::Any           # Catalog for discrete sizing
+    catalog_discrete               # Catalog for discrete sizing
     n_max_sections::Int            # Maximum number of sections per beam
 
     # calculated values
@@ -131,16 +131,21 @@ mutable struct SlabSizingParams
     M_maxs::Vector{<:Real}          # Maximum moments
     V_maxs::Vector{<:Real}          # Maximum shear forces
     x_maxs::Vector{<:Real}          # Maximum x-coordinates
-    load_dictionary::Dict{Any, Vector{Asap.AbstractLoad}}  # Dictionary comparing elements to loads
+    load_dictionary::Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}  # Dictionary comparing elements to loads
     load_df::DataFrame             # DataFrame of load information
     
     # results
-    minimizers::Vector{Vector}      # Minimum values
-    minimums::Vector{<:Real}        # Minimum values
+    minimizers::Vector{Vector{Float64}}      # Minimum values
+    minimums::Vector{Float64}        # Minimum values
     ids::Vector{String}         # IDs   
-    collinear_minimizers::Vector{Vector}  # Minimizers if collinear
+    collinear_minimizers::Vector{Vector{Float64}}  # Minimizers if collinear
     collinear_ids::Vector{String}  # Ids if collinear
-    collinear_minimums::Vector{<:Real}  # Minimums if collinear
+    collinear_minimums::Vector{Float64}  # Minimums if collinear
+
+    # composite action
+    composite_action::Bool           # Use composite stiffness for deflection checks
+    E_c::Real                        # Concrete elastic modulus (ksi) for modular ratio
+    slab_depth_in::Real              # Slab depth in beam units (in), set during sizing
 
     # setup values
     verbose::Bool                    # Whether to print detailed output
@@ -167,7 +172,7 @@ mutable struct SlabSizingParams
         element_ids::Vector{Int64}=Int64[],
         beam_units::Symbol=:in,              # Unit of measurement for beams
         serviceability_lim::Real=360,    # Divide length by limit to get serviceability
-        catalog_discrete::Any=allW_imperial(), # Catalog for discrete sizing
+        catalog_discrete=allW_imperial(), # Catalog for discrete sizing
         n_max_sections::Int=0,              # Maximum number of sections per beam
 
         # calculated values
@@ -178,16 +183,21 @@ mutable struct SlabSizingParams
         M_maxs::Vector{<:Real}=Float64[],    # Maximum moments
         V_maxs::Vector{<:Real}=Float64[],    # Maximum shear forces
         x_maxs::Vector{<:Real}=Float64[],    # Maximum x-coordinates
-        load_dictionary::Dict{Any, Vector{Asap.AbstractLoad}}=Dict{Any, Vector{Asap.AbstractLoad}}(), # Dictionary comparing elements to loads
+        load_dictionary::Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}=Dict{Tuple{Int,Int}, Vector{Asap.AbstractLoad}}(), # Dictionary comparing elements to loads
         load_df::DataFrame=DataFrame(), # DataFrame of load information
 
         # results
-        minimizers::Vector{Vector}=Vector[],  # Minimum values
-        minimums::Vector{<:Real}=Float64[],  # Minimum values
+        minimizers::Vector{Vector{Float64}}=Vector{Float64}[],  # Minimum values
+        minimums::Vector{Float64}=Float64[],  # Minimum values
         ids::Vector{String}=String[],         # IDs
-        collinear_minimizers::Vector{Vector}=Vector[], # Minimizers if collinear
+        collinear_minimizers::Vector{Vector{Float64}}=Vector{Float64}[], # Minimizers if collinear
         collinear_ids::Vector{String}=String[],       # Ids if collinear
-        collinear_minimums::Vector{<:Real}=Float64[], # Minimums if collinear
+        collinear_minimums::Vector{Float64}=Float64[], # Minimums if collinear
+
+        # composite action
+        composite_action::Bool=false,         # Use composite stiffness for deflection
+        E_c::Real=57.0 * sqrt(4000.0),          # Concrete E_c (ksi), = 57√(f'c_psi) for f'c = 4 ksi
+        slab_depth_in::Real=0.0,              # Slab depth (in), populated during sizing
 
         # setup values
         verbose::Bool=false                   # Whether to print detailed output
@@ -198,7 +208,7 @@ mutable struct SlabSizingParams
             beam_units, max_assembly_depth, deflection_limit, minimum_continuous, collinear, drawn, element_ids,
             serviceability_lim, catalog_discrete, n_max_sections, area, w, self_weight, max_beam_depth, M_maxs, V_maxs,
             x_maxs, load_dictionary, load_df, minimizers, minimums, ids, collinear_minimizers, collinear_ids,
-            collinear_minimums, verbose)
+            collinear_minimums, composite_action, E_c, slab_depth_in, verbose)
     end
 end
 
@@ -215,8 +225,8 @@ mutable struct SlabOptimResults <: AbstractOptParams
     slab_sizer::Symbol              # Slab sizer
     beam_sizer::Symbol              # Beam sizer
     area::Float64                   # Area
-    minimizers::Vector{Vector}      # Imperial
-    minimums::Vector{<:Real}       # Imperial
+    minimizers::Vector{Vector{Float64}}      # Imperial
+    minimums::Vector{Float64}       # Imperial
     ids::Vector{String}             # Identifications
     collinear::Union{Bool,Nothing}  # True/false collinear
     max_depth::Real                 # Maximum depth [in]
@@ -229,19 +239,19 @@ mutable struct SlabOptimResults <: AbstractOptParams
     mass_rebar::Float64             # Mass of rebar [kg]
     norm_mass_rebar::Float64        # Normalized mass of rebar [kg/m^2]
     embodied_carbon_rebar::Float64   # Embodied carbon of rebar [kg]
-    areas::Vector{<:Real}           # Areas [in^2]
-    x::Vector{Vector}                 # X-coordinates [m]
-    P::Vector{Vector}                 # Loads [kN]
-    Px::Vector{Vector}                # X-coordinates associated with loads [m]
-    My::Vector{Vector}              # Moments [kNm]
-    Mn::Vector{<:Real}             # Nominal moments [kNm]
-    Vy::Vector{Vector}              # Shear forces [kN]
-    Vn::Vector{<:Real}             # Nominal shear forces [kN]
-    Δ_local::Vector{Vector}         # Local displacements [m]
-    Δ_global::Vector{Vector}        # Global displacements [m]
-    sections::Vector{Any}           # Sections
+    areas::Vector{Float64}           # Areas [in^2]
+    x::Vector{Vector{Float64}}                 # X-coordinates [m]
+    P::Vector{Vector{Float64}}                 # Loads [kN]
+    Px::Vector{Vector{Float64}}                # X-coordinates associated with loads [m]
+    My::Vector{Vector{Float64}}              # Moments [kNm]
+    Mn::Vector{Float64}             # Nominal moments [kNm]
+    Vy::Vector{Vector{Float64}}              # Shear forces [kN]
+    Vn::Vector{Float64}             # Nominal shear forces [kN]
+    Δ_local::Vector{Vector{Float64}}         # Local displacements [m]
+    Δ_global::Vector{Vector{Float64}}        # Global displacements [m]
+    sections::Vector{String}           # Sections
 
-    function SlabOptimResults(slab_name::String, slab_type::Symbol, vector_1d::Vector{<:Real}, slab_sizer::Symbol, beam_sizer::Symbol, area::Float64, minimizers::Vector{Vector}, minimums::Vector{<:Real}, ids::Vector{String}, collinear::Union{Bool,Nothing}, max_depth::Real, mass_beams::Float64, norm_mass_beams::Float64, embodied_carbon_beams::Float64, mass_slab::Float64, norm_mass_slab::Float64, embodied_carbon_slab::Float64, mass_rebar::Float64, norm_mass_rebar::Float64, embodied_carbon_rebar::Float64, areas::Vector{<:Real}, x::Vector{Vector}, P::Vector{Vector}, Px::Vector{Vector}, My::Vector{Vector}, Mn::Vector{<:Real}, Vy::Vector{Vector}, Vn::Vector{<:Real}, Δ_local::Vector{Vector}, Δ_global::Vector{Vector}, sections::Vector{Any})
+    function SlabOptimResults(slab_name::String, slab_type::Symbol, vector_1d::Vector{<:Real}, slab_sizer::Symbol, beam_sizer::Symbol, area::Float64, minimizers::Vector{Vector{Float64}}, minimums::Vector{Float64}, ids::Vector{String}, collinear::Union{Bool,Nothing}, max_depth::Real, mass_beams::Float64, norm_mass_beams::Float64, embodied_carbon_beams::Float64, mass_slab::Float64, norm_mass_slab::Float64, embodied_carbon_slab::Float64, mass_rebar::Float64, norm_mass_rebar::Float64, embodied_carbon_rebar::Float64, areas::Vector{Float64}, x::Vector{Vector{Float64}}, P::Vector{Vector{Float64}}, Px::Vector{Vector{Float64}}, My::Vector{Vector{Float64}}, Mn::Vector{Float64}, Vy::Vector{Vector{Float64}}, Vn::Vector{Float64}, Δ_local::Vector{Vector{Float64}}, Δ_global::Vector{Vector{Float64}}, sections::Vector{String})
         new(slab_name, slab_type, vector_1d, slab_sizer, beam_sizer, area, minimizers, minimums, ids, collinear, max_depth, mass_beams, norm_mass_beams, embodied_carbon_beams, mass_slab, norm_mass_slab, embodied_carbon_slab, mass_rebar, norm_mass_rebar, embodied_carbon_rebar, areas, x, P, Px, My, Mn, Vy, Vn, Δ_local, Δ_global, sections)
     end
 
@@ -252,9 +262,9 @@ mutable struct SlabOptimResults <: AbstractOptParams
         slab_sizer = :cellular
         beam_sizer = :continuous
         area = mass_beams = norm_mass_beams = embodied_carbon_beams = mass_slab = norm_mass_slab = embodied_carbon_slab = mass_rebar = norm_mass_rebar = embodied_carbon_rebar = 0.0
-        minimizers = x = P = Px = My = Vy = Δ_local = Δ_global =sections = [[]]
+        minimizers = x = P = Px = My = Vy = Δ_local = Δ_global = Vector{Float64}[Float64[]]
         minimums = areas = Mn = Vn = [0.0]
-        ids = [""]
+        ids = sections = [""]
         collinear = collinear
         max_depth = max_depth
 
