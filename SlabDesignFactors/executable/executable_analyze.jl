@@ -7,7 +7,7 @@ using CSV
 using DataFrames
 using .SlabDesignFactors
 
-function analyze_all_jsons(results_path::String)
+function analyze_all_jsons(results_path::String, completion_file::String)
 
     println("Dependencies loaded successfully.")
 
@@ -101,7 +101,8 @@ function analyze_all_jsons(results_path::String)
                             max_depth=max_depth, # in
                             beam_units=:in, # in, etc.
                             serviceability_lim=360,
-                            minimum_continuous=true
+                            minimum_continuous=true,
+                            deflection_limit=false
                         );
 
                         iteration_result = collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params));
@@ -125,7 +126,6 @@ function analyze_all_jsons(results_path::String)
     end
 
     # Create a completion file to signal the end of processing
-    completion_file = joinpath(results_path, "analysis_complete.txt")
     open(completion_file, "w") do f
         write(f, "Analysis complete")
     end
@@ -135,13 +135,14 @@ end
 # Main execution
 function main()
     args = ARGS
-    if length(args) != 1
-        println("Usage: julia executable_analyze.jl <results_path>")
+    if length(args) != 2
+        println("Usage: julia executable_analyze.jl <results_path> <completion_file>")
         return
     end
 
     results_path = args[1]
-    analyze_all_jsons(results_path)
+    completion_file = args[2]
+    analyze_all_jsons(results_path, completion_file)
 
 end
 

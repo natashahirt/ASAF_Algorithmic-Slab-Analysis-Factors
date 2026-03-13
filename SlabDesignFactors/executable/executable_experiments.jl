@@ -7,7 +7,7 @@ using CSV
 using DataFrames
 using .SlabDesignFactors
 
-function analyze_experiments(results_path::String)
+function analyze_experiments(results_path::String, completion_file::String)
 
     println("Dependencies loaded successfully.")
 
@@ -32,7 +32,7 @@ function analyze_experiments(results_path::String)
         :fix_params => [false]
     )
 
-    experiment_dicts = [experiment_fix_params]
+    experiment_dicts = [experiment_max_depths]
 
     # Function to process a single set of parameters
     function process_params(json_path, results_path, experiment_dict)
@@ -53,15 +53,11 @@ function analyze_experiments(results_path::String)
         sub_paths = filter(x -> endswith(x, ".json"), readdir(json_path))
         println(sub_paths)
         
-        # Evaluate slabs
-        for max_depth in max_depths
-
+        # Evaluate slabs with threading on max_depths
+        Threads.@threads for max_depth in max_depths
             for slab_sizer in slab_sizers
-
                 for fix_param in fix_params
-
-                        for (i, slab_type) in enumerate(slab_types)
-
+                    for (i, slab_type) in enumerate(slab_types)
                         vector_1d = vector_1ds[i]
 
                         # Check if this configuration already exists in results file
@@ -140,12 +136,12 @@ function analyze_experiments(results_path::String)
 
     end
 
-    Threads.@threads for experiment_dict in experiment_dicts
+    # Remove threading from here
+    for experiment_dict in experiment_dicts
         process_params(json_path, results_path, experiment_dict)
     end
 
     # Create a completion file to signal the end of processing
-    completion_file = joinpath(results_path, "experiments_complete.txt")
     open(completion_file, "w") do f
         write(f, "Experiments complete")
     end
@@ -156,17 +152,15 @@ end
 function main()
     args = ARGS
 
-    if length(args) != 1
-        println("Usage: julia executable_experiments.jl <results_path>")
+    if length(args) != 2
+        println("Usage: julia executable_experiments.jl <results_path> <completion_file>")
         return
     end
 
     results_path = args[1]
-    analyze_experiments(results_path)
+    completion_file = args[2]
+    analyze_experiments(results_path, completion_file)
 
 end
 
 main()
-
-results_path = "/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/results/remote_results/"
-analyze_experiments(results_path)

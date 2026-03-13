@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -n 3
+#SBATCH -n 5
 #SBATCH -N 1
 #SBATCH -t 12:00:00
 #SBATCH -C centos7
@@ -11,8 +11,9 @@
 #SBATCH --mail-user=nhirt@mit.edu
 
 # Set paths
-EXECUTABLE_PATH="SlabDesignFactors/executable/executable_analyze.jl"
-RESULTS_PATH="SlabDesignFactors/results/remote_results_min/"
+EXECUTABLE_PATH="$1"
+RESULTS_PATH="$2"  # Use the first argument as the results path
+COMPLETION_FILE="$3"
 
 # Ensure output directories exist
 mkdir -p outputs
@@ -21,10 +22,7 @@ mkdir -p $RESULTS_PATH
 echo "Running Julia script..."
 
 # Run the Julia script
-julia -t 3 $EXECUTABLE_PATH $RESULTS_PATH
-
-# Check for completion file
-COMPLETION_FILE="$RESULTS_PATH/analysis_min_complete.txt"
+julia -t 3 $EXECUTABLE_PATH $RESULTS_PATH $COMPLETION_FILE
 
 while [ ! -f "$COMPLETION_FILE" ]; do
     sleep 60  # Check every 60 seconds

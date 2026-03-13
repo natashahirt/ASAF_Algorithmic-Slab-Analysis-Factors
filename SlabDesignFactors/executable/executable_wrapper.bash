@@ -5,9 +5,10 @@ SLURM_SCRIPT="SlabDesignFactors/executable/executable.slurm"
 MAX_RESUBMISSIONS=10
 COUNTER=0
 EMAIL="nhirt@mit.edu"
-RESULTS_PATH="SlabDesignFactors/results/remote_results_min/"
-COMPLETION_FILE="$RESULTS_PATH/analysis_min_complete.txt"
+RESULTS_PATH="SlabDesignFactors/results/remote_results_nodeflection_noslabmin/"
+COMPLETION_FILE="${RESULTS_PATH}experiments_complete.txt"
 LOG_FILE="logs/slurm_monitor.log"
+EXECUTABLE_PATH="SlabDesignFactors/executable/executable_experiments.jl"
 
 # Log setup
 exec > >(tee -i $LOG_FILE)
@@ -16,7 +17,7 @@ exec 2>&1
 # Function to submit a job
 submit_job() {
     echo "$(date) - Submitting job..."
-    JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" 2>&1)
+    JOB_ID=$(sbatch --parsable "$SLURM_SCRIPT" "$EXECUTABLE_PATH" "$RESULTS_PATH" "$COMPLETION_FILE" 2>&1)
     if [ $? -ne 0 ]; then
         echo "$(date) - Failed to submit job: $JOB_ID"
         echo -e "Job submission failed:\n$JOB_ID" | mail -s "SLURM Job Submission Error" $EMAIL
