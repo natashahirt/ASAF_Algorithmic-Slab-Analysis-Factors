@@ -158,23 +158,24 @@ function run_one_config(cfg)::Union{Vector{SlabOptimResults}, Nothing}
             slab_type=cfg.slab_type,
             vector_1d=cfg.vector_1d,
             slab_sizer=cfg.slab_sizer,
-            spacing=0.1,
+            spacing=SlabDesignFactors.FULL_SWEEP_STRIP_SPACING,
             plot_analysis=false,
             fix_param=true,
             slab_units=:m,
         )
 
+        # Loads/factors match `run_max_depths` / `full_sweep_defaults.jl`
+        # (struct defaults: slab_dead_load=0, deflection_limit=true).
         beam_sizing_params = SlabDesignFactors.SlabSizingParams(
-            live_load=SlabDesignFactors.psf_to_ksi(50),
-            superimposed_dead_load=SlabDesignFactors.psf_to_ksi(15),
-            live_factor=1.6,
-            dead_factor=1.2,
+            live_load=SlabDesignFactors.FULL_SWEEP_LIVE_LOAD,
+            superimposed_dead_load=SlabDesignFactors.FULL_SWEEP_SUPERIMPOSED_DEAD_LOAD,
+            live_factor=SlabDesignFactors.FULL_SWEEP_LIVE_FACTOR,
+            dead_factor=SlabDesignFactors.FULL_SWEEP_DEAD_FACTOR,
             beam_sizer=:discrete,
             max_depth=cfg.max_depth,
             beam_units=:in,
-            serviceability_lim=360,
+            serviceability_lim=SlabDesignFactors.FULL_SWEEP_SERVICEABILITY_LIM,
             minimum_continuous=true,
-            deflection_limit=false,
         )
 
         return collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))

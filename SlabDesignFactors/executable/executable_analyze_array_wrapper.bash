@@ -15,7 +15,10 @@ EXECUTABLE_PATH="${EXECUTABLE_PATH:-SlabDesignFactors/executable/executable_anal
 TOTAL_SHARDS="${TOTAL_SHARDS:-16}"
 MAX_RESUBMISSIONS="${MAX_RESUBMISSIONS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
-LOG_FILE="${LOG_FILE:-logs/analyze_array_wrapper.log}"
+MERGE_SCRIPT="${MERGE_SCRIPT:-SlabDesignFactors/executable/executable_merge_shards.jl}"
+MERGED_DIR="${MERGED_DIR:-${RESULTS_ROOT}/merged}"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${LOG_FILE:-logs/analyze_array_wrapper_${TIMESTAMP}.log}"
 
 mkdir -p logs
 exec > >(tee -i "$LOG_FILE")
@@ -23,6 +26,19 @@ exec 2>&1
 
 completion_run_dir="${COMPLETION_DIR}/${RUN_NAME}"
 run_completion_file="${completion_run_dir}/run_complete.txt"
+merge_done_file="${MERGED_DIR}/merged_${RUN_NAME}.done"
+
+run_merge_if_needed() {
+    mkdir -p "$MERGED_DIR"
+    if [[ -f "$merge_done_file" ]]; then
+        echo "$(date) - Merge skipped: found ${merge_done_file} (delete it to force re-merge)."
+        return 0
+    fi
+    echo "$(date) - Running merge → ${MERGED_DIR}"
+    julia "$MERGE_SCRIPT" "$RESULTS_ROOT" "$RUN_NAME" "$MERGED_DIR"
+    touch "$merge_done_file"
+    echo "$(date) - Merge complete; wrote ${merge_done_file}"
+}
 
 build_missing_shard_list() {
     local missing=()
@@ -72,12 +88,15 @@ echo "PARAMS_FILE=${PARAMS_FILE}"
 echo "EXECUTABLE_PATH=${EXECUTABLE_PATH}"
 echo "TOTAL_SHARDS=${TOTAL_SHARDS}"
 echo "MAX_RESUBMISSIONS=${MAX_RESUBMISSIONS}"
+echo "MERGED_DIR=${MERGED_DIR}"
+echo "merge_done_file=${merge_done_file}"
 
 attempt=0
 while [[ "$attempt" -lt "$MAX_RESUBMISSIONS" ]]; do
     if [[ -f "$run_completion_file" ]]; then
         echo "$(date) - Run completion file found: ${run_completion_file}"
         echo "$(date) - All shards completed."
+        run_merge_if_needed
         exit 0
     fi
 
@@ -87,6 +106,7 @@ while [[ "$attempt" -lt "$MAX_RESUBMISSIONS" ]]; do
         echo "$(date) - No missing shard markers found."
         echo "$(date) - Creating run completion file."
         echo "all shards completed" > "$run_completion_file"
+        run_merge_if_needed
         exit 0
     fi
 
@@ -96,9 +116,10 @@ while [[ "$attempt" -lt "$MAX_RESUBMISSIONS" ]]; do
     submit_missing_shards "$missing_list"
     wait_for_job_completion "$job_id"
 
-    # If all done after this cycle, exit immediately.
+    # If all done after this cycle, merge and exit.
     if [[ -f "$run_completion_file" ]]; then
         echo "$(date) - Run completion file found after attempt ${attempt}."
+        run_merge_if_needed
         exit 0
     fi
 done

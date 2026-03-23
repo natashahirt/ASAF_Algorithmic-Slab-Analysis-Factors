@@ -288,6 +288,14 @@ For unshored composite construction, deflections are decomposed by load stage:
 | `Δ_limit_total` | L/240 limit per beam [in]                          |
 | `δ_live_ok`     | true if δ_live ≤ L/360                              |
 | `δ_total_ok`    | true if δ_total ≤ L/240                             |
+
+Sizer exit state (from `optimal_beamsizer` outer staged-deflection loop):
+
+| Field                 | Description                                        |
+|-----------------------|----------------------------------------------------|
+| `composite_action`    | Whether composite stiffness was used in sizing     |
+| `staged_converged`    | `true` if staged Ix loop converged (or N/A)        |
+| `staged_n_violations` | Beams still violating staged limits at exit        |
 """
 @kwdef mutable struct SlabOptimResults <: AbstractOptParams
     slab_name::String                          = ""
@@ -360,4 +368,13 @@ For unshored composite construction, deflections are decomposed by load stage:
     i_L360_fail::Vector{Int}                   = Int[]
     n_L240_fail::Int                           = 0
     i_L240_fail::Vector{Int}                   = Int[]
+
+    # --- Optimizer / serviceability flags (from `SlabSizingParams`) ---
+    nlp_solver::String                         = ""   # `"MIP"` for discrete; else e.g. `"MMA"`, `"Ipopt"`
+    deflection_limit::Bool                     = true
+
+    # --- Sizer staged-deflection loop (see `optimal_beamsizer`) ---
+    composite_action::Bool                     = false
+    staged_converged::Bool                     = true
+    staged_n_violations::Int                   = 0
 end

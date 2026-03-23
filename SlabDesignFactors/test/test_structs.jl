@@ -27,6 +27,11 @@ using Test
         @test isempty(r.δ_slab_dead)
         @test isempty(r.δ_beam_dead)
         @test isempty(r.δ_live_ok)
+        @test r.composite_action == false
+        @test r.staged_converged == true
+        @test r.staged_n_violations == 0
+        @test r.nlp_solver == ""
+        @test r.deflection_limit == true
     end
 
     @testset "keyword construction" begin

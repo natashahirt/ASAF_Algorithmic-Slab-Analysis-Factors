@@ -192,6 +192,27 @@ result_ok(r) = length(r.minimizers) >= 1 && r.norm_mass_beams > 0
                         @test res_comp.δ_total_ok[i] == (res_comp.δ_total[i] <= res_comp.Δ_limit_total[i])
                     end
                 end
+
+                @testset "CSV export mirrors staged fields (create_results_dataframe)" begin
+                    df = create_results_dataframe([res_comp], false)
+                    for c in (
+                        "nlp_solver", "deflection_limit",
+                        "composite_action", "staged_converged", "staged_n_violations",
+                        "n_L360_fail", "n_L240_fail", "i_L360_fail", "i_L240_fail",
+                        "Δ_limit_live_mm", "Δ_limit_total_mm",
+                        "max_δ_total_mm", "max_bay_span_in", "global_δ_ok",
+                        "max_util_M", "max_util_V", "max_col_util",
+                    )
+                        @test c in names(df)
+                    end
+                    @test df.composite_action[1] == true
+                    @test df.n_L360_fail[1] == res_comp.n_L360_fail
+                    @test df.n_L240_fail[1] == res_comp.n_L240_fail
+                    @test df.staged_converged[1] == res_comp.staged_converged
+                    @test df.staged_n_violations[1] == res_comp.staged_n_violations
+                    @test df.nlp_solver[1] == "MIP"
+                    @test df.deflection_limit[1] == true
+                end
             end
 
             # ── 8. Column sizing (if columns exist) ───────────────────

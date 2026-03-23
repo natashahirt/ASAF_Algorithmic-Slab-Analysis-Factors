@@ -8,11 +8,12 @@ set -euo pipefail
 SLURM_SCRIPT="${SLURM_SCRIPT:-SlabDesignFactors/executable/executable_experiments_array.slurm}"
 RESULTS_PATH="${RESULTS_PATH:-SlabDesignFactors/results/remote_results_experiments}"
 COMPLETION_DIR="${COMPLETION_DIR:-${RESULTS_PATH}/completion}"
-STUDY_LIST_CSV="${STUDY_LIST_CSV:-max_depths,strip_resolution,constrained_inventory,nlp_solver_comparison,material_scenario_mc}"
+STUDY_LIST_CSV="${STUDY_LIST_CSV:-max_depths,strip_resolution,constrained_inventory,nlp_solver_comparison,material_scenario_mc,validation_mip}"
 EXECUTABLE_PATH="${EXECUTABLE_PATH:-SlabDesignFactors/executable/executable_experiments.jl}"
 MAX_RESUBMISSIONS="${MAX_RESUBMISSIONS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
-LOG_FILE="${LOG_FILE:-logs/experiments_array_wrapper.log}"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${LOG_FILE:-logs/experiments_array_wrapper_${TIMESTAMP}.log}"
 
 mkdir -p logs
 exec > >(tee -i "$LOG_FILE")

@@ -10,7 +10,7 @@ using Asap, AsapToolkit, AsapOptim
 using CairoMakie
 using Nonconvex, Zygote
 using JuMP: JuMP
-using GLPK, Ipopt, NLopt
+using GLPK, Ipopt, NLopt, Gurobi
 using Statistics, Colors, DataFrames, CSV, JSON, Interpolations, StatsBase, UnPack
 
 # Load packages for websocket

@@ -2,10 +2,9 @@
 
 #SBATCH -N 1
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1-5
+#SBATCH --array=1-6
 #SBATCH -t 12:00:00
-#SBATCH -C centos7
-#SBATCH -p sched_any
+#SBATCH -p mit_normal
 #SBATCH -o outputs/experiments_array_%A_%a.out
 #SBATCH -e outputs/experiments_array_%A_%a.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
@@ -13,11 +12,14 @@
 
 set -euo pipefail
 
+module load julia
+module load gurobi
+
 mkdir -p outputs
 
 RESULTS_PATH="${1:-SlabDesignFactors/results/remote_results_experiments}"
 COMPLETION_DIR="${2:-${RESULTS_PATH}/completion}"
-STUDY_LIST_CSV="${3:-max_depths,strip_resolution,constrained_inventory,nlp_solver_comparison,material_scenario_mc}"
+STUDY_LIST_CSV="${3:-max_depths,strip_resolution,constrained_inventory,nlp_solver_comparison,material_scenario_mc,validation_mip}"
 EXECUTABLE_PATH="${4:-SlabDesignFactors/executable/executable_experiments.jl}"
 
 IFS=',' read -r -a STUDIES <<< "$STUDY_LIST_CSV"

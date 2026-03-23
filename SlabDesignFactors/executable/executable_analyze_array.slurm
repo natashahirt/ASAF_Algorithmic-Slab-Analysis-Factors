@@ -4,14 +4,16 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-16
 #SBATCH -t 12:00:00
-#SBATCH -C centos7
-#SBATCH -p sched_any
+#SBATCH -p mit_normal
 #SBATCH -o outputs/analyze_array_%A_%a.out
 #SBATCH -e outputs/analyze_array_%A_%a.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=nhirt@mit.edu
 
 set -euo pipefail
+
+module load julia
+module load gurobi
 
 mkdir -p outputs
 
@@ -21,8 +23,16 @@ COMPLETION_DIR="${3:-${RESULTS_ROOT}/completion}"
 PARAMS_FILE="${4:-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/executable/params.txt}"
 EXECUTABLE_PATH="${5:-SlabDesignFactors/executable/executable_analyze_sharded.jl}"
 
-if [[ -z "${SLURM_ARRAY_TASK_ID:-}" || -z "${SLURM_ARRAY_TASK_COUNT:-}" ]]; then
+if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     echo "This script must be submitted as a Slurm array job."
+    exit 1
+fi
+# Some Slurm builds omit SLURM_ARRAY_TASK_COUNT; derive span from MIN/MAX when needed.
+if [[ -z "${SLURM_ARRAY_TASK_COUNT:-}" && -n "${SLURM_ARRAY_TASK_MIN:-}" && -n "${SLURM_ARRAY_TASK_MAX:-}" ]]; then
+    export SLURM_ARRAY_TASK_COUNT=$((SLURM_ARRAY_TASK_MAX - SLURM_ARRAY_TASK_MIN + 1))
+fi
+if [[ -z "${SLURM_ARRAY_TASK_COUNT:-}" ]]; then
+    echo "Could not determine array task count (set SLURM_ARRAY_TASK_COUNT or use Slurm that exports it)."
     exit 1
 fi
 

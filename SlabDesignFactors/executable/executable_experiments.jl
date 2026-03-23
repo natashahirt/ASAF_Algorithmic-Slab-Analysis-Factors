@@ -10,6 +10,8 @@ Experiments included:
 4. `nlp_solver_comparison` (continuous sizing across NLP solvers with MIP warm-start)
 5. `material_scenario_mc` (concrete material scenarios × slab sizers with
    per-material Monte Carlo on ECCs for steel, concrete, and rebar)
+6. `validation_mip` (validation JSONs with drawn=true, perimeter beams, holes,
+   element IDs, building-type loads, and unconstrained MIP sizing)
 
 All studies are resumable from CSV outputs and safe for repeated 12-hour
 Slurm re-submissions.
@@ -27,19 +29,28 @@ using .SlabDesignFactors
 
 const DEFAULT_TOPOLOGY_JSON_PATH = "/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/topology/"
 const DEFAULT_VALIDATION_JSON_PATH = "/home/nhirt/2024_Slab-Design-Factors/Geometries/validation/"
-const DEFAULT_STUDIES = Set(["max_depths", "strip_resolution", "constrained_inventory", "nlp_solver_comparison", "material_scenario_mc"])
+const DEFAULT_STUDIES = Set(["max_depths", "strip_resolution", "constrained_inventory", "nlp_solver_comparison", "material_scenario_mc", "validation_mip"])
 const NLP_SOLVER_LIST = [:MIP, :MMA, :SLSQP, :CCSAQ, :COBYLA, :Ipopt]
 
-# ── Shared experiment defaults ───────────────────────────────────────────────
-const DEFAULT_LIVE_LOAD   = SlabDesignFactors.psf_to_ksi(50)
-const DEFAULT_SDL         = SlabDesignFactors.psf_to_ksi(15)
-const DEFAULT_LIVE_FACTOR = 1.6
-const DEFAULT_DEAD_FACTOR = 1.2
+# ── Shared experiment defaults (topology sweeps; see `full_sweep_defaults.jl`) ─
+const DEFAULT_LIVE_LOAD   = SlabDesignFactors.FULL_SWEEP_LIVE_LOAD
+const DEFAULT_SDL         = SlabDesignFactors.FULL_SWEEP_SUPERIMPOSED_DEAD_LOAD
+const DEFAULT_LIVE_FACTOR = SlabDesignFactors.FULL_SWEEP_LIVE_FACTOR
+const DEFAULT_DEAD_FACTOR = SlabDesignFactors.FULL_SWEEP_DEAD_FACTOR
 const DEFAULT_MAX_DEPTH   = 40.0
-const DEFAULT_SERV_LIM    = 360
+const DEFAULT_SERV_LIM    = SlabDesignFactors.FULL_SWEEP_SERVICEABILITY_LIM
 const DEFAULT_SLAB_TYPE   = :isotropic
 const DEFAULT_VECTOR_1D   = [0.0, 0.0]
-const DEFAULT_SPACING     = 0.1
+const DEFAULT_SPACING     = SlabDesignFactors.FULL_SWEEP_STRIP_SPACING
+const DEFAULT_COMPOSITE   = SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION
+const DEFAULT_COLLINEAR   = SlabDesignFactors.FULL_SWEEP_COLLINEAR
+const DEFAULT_DRF         = SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR
+
+# Columns added to custom study CSVs (strip / NLP / material) for parity with `create_results_dataframe`.
+const STAGING_SUMMARY_COLS = [
+    :beam_sizer, :nlp_solver, :deflection_limit, :composite_action, :staged_converged,
+    :staged_n_violations, :n_L360_fail, :n_L240_fail, :global_δ_ok, :max_staged_δ_total_mm,
+]
 
 # ── Monte Carlo parameters ──────────────────────────────────────────────────
 const MC_N_SAMPLES   = 10_000
@@ -94,6 +105,21 @@ function write_table_atomically(path::String, df::DataFrame)
     tmp = path * ".tmp"
     CSV.write(tmp, df)
     Base.Filesystem.rename(tmp, path)
+end
+
+"""
+    ensure_results_columns!(df, colnames)
+
+Append missing columns to `df` when upgrading CSV schemas so existing cluster
+outputs remain readable. Existing rows get `missing` in new columns.
+"""
+function ensure_results_columns!(df::DataFrame, colnames::Vector{Symbol})
+    for sym in colnames
+        if !hasproperty(df, sym)
+            df[!, sym] = [missing for _ in 1:nrow(df)]
+        end
+    end
+    nothing
 end
 
 function done_set_max_depth(results_file::String)::Set{Tuple{String, String, Float64, String, Float64, Float64}}
@@ -239,22 +265,26 @@ function run_max_depths(results_path::String; json_path::String=DEFAULT_TOPOLOGY
                 slab_type=cfg.slab_type,
                 vector_1d=cfg.vector_1d,
                 slab_sizer=cfg.slab_sizer,
-                spacing=0.1,
+                spacing=DEFAULT_SPACING,
                 plot_analysis=false,
                 fix_param=true,
                 slab_units=:m,
             )
 
             beam_sizing_params = SlabDesignFactors.SlabSizingParams(
-                live_load=SlabDesignFactors.psf_to_ksi(50),
-                superimposed_dead_load=SlabDesignFactors.psf_to_ksi(15),
-                live_factor=1.6,
-                dead_factor=1.2,
+                live_load=DEFAULT_LIVE_LOAD,
+                superimposed_dead_load=DEFAULT_SDL,
+                slab_dead_load=0.0,
+                live_factor=DEFAULT_LIVE_FACTOR,
+                dead_factor=DEFAULT_DEAD_FACTOR,
                 beam_sizer=:discrete,
                 max_depth=cfg.max_depth,
                 beam_units=:in,
-                serviceability_lim=360,
+                serviceability_lim=DEFAULT_SERV_LIM,
                 minimum_continuous=true,
+                collinear=DEFAULT_COLLINEAR,
+                composite_action=DEFAULT_COMPOSITE,
+                deflection_reduction_factor=DEFAULT_DRF,
             )
 
             iteration_result = collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))
@@ -297,6 +327,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
             elapsed_s=Float64[],
         )
     end
+    ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
 
     configs = NamedTuple[]
     sub_paths = sort(filter(x -> endswith(x, ".json"), readdir(json_path)))
@@ -337,15 +368,15 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
             )
 
             sizing_params = SlabDesignFactors.SlabSizingParams(
-                live_load=SlabDesignFactors.psf_to_ksi(50),
-                superimposed_dead_load=SlabDesignFactors.psf_to_ksi(15),
+                live_load=DEFAULT_LIVE_LOAD,
+                superimposed_dead_load=DEFAULT_SDL,
                 slab_dead_load=0.0,
-                live_factor=1.6,
-                dead_factor=1.2,
+                live_factor=DEFAULT_LIVE_FACTOR,
+                dead_factor=DEFAULT_DEAD_FACTOR,
                 beam_sizer=:discrete,
-                max_depth=40.0,
+                max_depth=DEFAULT_MAX_DEPTH,
                 beam_units=:in,
-                serviceability_lim=360,
+                serviceability_lim=DEFAULT_SERV_LIM,
                 collinear=true,
                 minimum_continuous=true,
                 n_max_sections=0,
@@ -363,6 +394,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
             mean_depth = isempty(slab_params.slab_depths) ? 0.0 : mean(slab_params.slab_depths)
             dt = time() - t0
 
+            max_staged_mm = round(results.max_δ_total * 25.4, digits=3)
             row = (
                 cfg.name,
                 cfg.spacing,
@@ -379,6 +411,16 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                 results.area,
                 mean_depth,
                 dt,
+                String(results.beam_sizer),
+                results.nlp_solver,
+                results.deflection_limit,
+                results.composite_action,
+                results.staged_converged,
+                results.staged_n_violations,
+                results.n_L360_fail,
+                results.n_L240_fail,
+                results.global_δ_ok,
+                max_staged_mm,
             )
 
             lock(table_lock) do
@@ -388,7 +430,10 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
         catch e
             dt = time() - t0
             lock(table_lock) do
-                push!(out_df, (cfg.name, cfg.spacing, 0, 0, 0, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, dt))
+                push!(out_df, (
+                    cfg.name, cfg.spacing, 0, 0, 0, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, dt,
+                    missing, missing, missing, missing, missing, missing, missing, missing, missing, missing,
+                ))
                 write_table_atomically(results_file, out_df)
             end
             @warn "Failed strip-resolution config" name=cfg.name spacing=cfg.spacing exception=e
@@ -455,7 +500,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
             slab_thickness=4.75 * SlabDesignFactors.convert_to_m[:in],
             vector_1d=[0.0, 1.0],
             slab_sizer=:uniform,
-            spacing=0.1,
+            spacing=DEFAULT_SPACING,
             plot_analysis=false,
             fix_param=true,
             slab_units=:m,
@@ -520,7 +565,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
     slab_type = :isotropic
     vector_1d = [1.0, 0.0]
     slab_sizer = :uniform
-    spacing = 0.1
+    spacing = DEFAULT_SPACING
     max_depth = 40.0
 
     out_df = if isfile(results_file)
@@ -544,6 +589,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             error_message=String[],
         )
     end
+    ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
 
     configs = NamedTuple[]
     sub_paths = sort(filter(x -> endswith(x, ".json"), readdir(json_path)))
@@ -578,6 +624,17 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
         max_deflection_in = NaN
         err = ""
 
+        beam_sizer_str = missing
+        nlp_solver_out = missing
+        deflection_limit_out = missing
+        composite_action_out = missing
+        staged_converged_out = missing
+        staged_n_violations_out = missing
+        n_L360_fail_out = missing
+        n_L240_fail_out = missing
+        global_δ_ok_out = missing
+        max_staged_mm_out = missing
+
         try
             geometry_dict = read_geometry_from_json(cfg.path)
             geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
@@ -598,16 +655,16 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             nlp_solver = cfg.solver == :MIP ? :MMA : cfg.solver
 
             sizing_params = SlabDesignFactors.SlabSizingParams(
-                live_load=SlabDesignFactors.psf_to_ksi(50),
-                superimposed_dead_load=SlabDesignFactors.psf_to_ksi(15),
+                live_load=DEFAULT_LIVE_LOAD,
+                superimposed_dead_load=DEFAULT_SDL,
                 slab_dead_load=0.0,
-                live_factor=1.6,
-                dead_factor=1.2,
+                live_factor=DEFAULT_LIVE_FACTOR,
+                dead_factor=DEFAULT_DEAD_FACTOR,
                 beam_sizer=beam_sizer,
                 nlp_solver=nlp_solver,
                 max_depth=max_depth,
                 beam_units=:in,
-                serviceability_lim=360,
+                serviceability_lim=DEFAULT_SERV_LIM,
                 minimum_continuous=true,
                 collinear=true,
                 composite_action=true,
@@ -633,6 +690,16 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 ec_total = results.embodied_carbon_beams + results.embodied_carbon_slab + results.embodied_carbon_rebar
                 max_deflection_in = maximum(maximum(abs.(d)) for d in results.Δ_local if !isempty(d); init=0.0)
                 success = true
+                beam_sizer_str = String(results.beam_sizer)
+                nlp_solver_out = results.nlp_solver
+                deflection_limit_out = results.deflection_limit
+                composite_action_out = results.composite_action
+                staged_converged_out = results.staged_converged
+                staged_n_violations_out = results.staged_n_violations
+                n_L360_fail_out = results.n_L360_fail
+                n_L240_fail_out = results.n_L240_fail
+                global_δ_ok_out = results.global_δ_ok
+                max_staged_mm_out = round(results.max_δ_total * 25.4, digits=3)
             else
                 err = "No minimizers returned from optimizer"
             end
@@ -658,6 +725,16 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             ec_total,
             max_deflection_in,
             err,
+            beam_sizer_str,
+            nlp_solver_out,
+            deflection_limit_out,
+            composite_action_out,
+            staged_converged_out,
+            staged_n_violations_out,
+            n_L360_fail_out,
+            n_L240_fail_out,
+            global_δ_ok_out,
+            max_staged_mm_out,
         )
 
         lock(table_lock) do
@@ -782,6 +859,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
             error_message=String[],
         )
     end
+    ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
 
     table_lock = ReentrantLock()
     Threads.@threads for i in eachindex(configs)
@@ -801,6 +879,17 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
         mc_joint = (mean=NaN, std=NaN, p5=NaN, p25=NaN, p50=NaN, p75=NaN, p95=NaN)
         vf_steel = NaN; vf_conc = NaN; vf_rebar = NaN
         err = ""
+
+        beam_sizer_str = missing
+        nlp_solver_out = missing
+        deflection_limit_out = missing
+        composite_action_out = missing
+        staged_converged_out = missing
+        staged_n_violations_out = missing
+        n_L360_fail_out = missing
+        n_L240_fail_out = missing
+        global_δ_ok_out = missing
+        max_staged_mm_out = missing
 
         try
             geometry_dict = read_geometry_from_json(cfg.path)
@@ -841,6 +930,16 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
 
             if !isempty(sizing_params.minimizers)
                 results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params, check_collinear=false)
+                beam_sizer_str = String(results.beam_sizer)
+                nlp_solver_out = results.nlp_solver
+                deflection_limit_out = results.deflection_limit
+                composite_action_out = results.composite_action
+                staged_converged_out = results.staged_converged
+                staged_n_violations_out = results.staged_n_violations
+                n_L360_fail_out = results.n_L360_fail
+                n_L240_fail_out = results.n_L240_fail
+                global_δ_ok_out = results.global_δ_ok
+                max_staged_mm_out = round(results.max_δ_total * 25.4, digits=3)
                 n_beams = length(results.Δ_local)
                 n_strips = length(slab_params.load_areas)
                 norm_mass_beams = results.norm_mass_beams
@@ -913,11 +1012,124 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
             mc_joint.p50, mc_joint.p75, mc_joint.p95,
             vf_steel, vf_conc, vf_rebar,
             err,
+            beam_sizer_str,
+            nlp_solver_out,
+            deflection_limit_out,
+            composite_action_out,
+            staged_converged_out,
+            staged_n_violations_out,
+            n_L360_fail_out,
+            n_L240_fail_out,
+            global_δ_ok_out,
+            max_staged_mm_out,
         )
 
         lock(table_lock) do
             push!(out_df, row)
             write_table_atomically(results_file, out_df)
+        end
+    end
+end
+
+function done_set_validation_mip(results_file::String)::Set{String}
+    out = Set{String}()
+    if !isfile(results_file)
+        return out
+    end
+    try
+        df = CSV.read(results_file, DataFrame)
+        if !("name" in names(df))
+            return out
+        end
+        for r in eachrow(df)
+            push!(out, String(r.name))
+        end
+    catch e
+        @warn "Failed to read validation_mip done-set" file=results_file exception=e
+    end
+    return out
+end
+
+function run_validation_mip(results_path::String; json_path::String=DEFAULT_VALIDATION_JSON_PATH)
+    println("\n=== Study: validation_mip ===")
+    ensure_dir(results_path)
+
+    results_name = "validation_mip"
+    results_file = joinpath(results_path, results_name * ".csv")
+    done = done_set_validation_mip(results_file)
+
+    live_load_dict = Dict(
+        "office" => 60,
+        "school" => 50,
+        "warehouse" => 250,
+    )
+    building_names = ["office", "school", "warehouse"]
+
+    configs = NamedTuple[]
+    for bname in building_names
+        if bname in done
+            continue
+        end
+        path = joinpath(json_path, bname * ".json")
+        push!(configs, (name=bname, path=path))
+    end
+
+    println("Pending validation_mip configs: $(length(configs))")
+    isempty(configs) && return
+
+    append_lock = ReentrantLock()
+    Threads.@threads for i in eachindex(configs)
+        cfg = configs[i]
+        println("[validation_mip] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name)")
+        try
+            geometry_dict = read_geometry_from_json(cfg.path)
+            geometry, type_information = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=true)
+
+            slab_params = SlabDesignFactors.SlabAnalysisParams(
+                geometry,
+                slab_name=cfg.name,
+                slab_type=:uniaxial,
+                slab_thickness=4.75 * SlabDesignFactors.convert_to_m[:in],
+                vector_1d=[0.0, 1.0],
+                slab_sizer=:uniform,
+                spacing=DEFAULT_SPACING,
+                plot_analysis=false,
+                fix_param=true,
+                slab_units=:m,
+                i_holes=type_information["i_holes"],
+                i_perimeter=type_information["i_perimeter"],
+            )
+
+            beam_sizing_params = SlabDesignFactors.SlabSizingParams(
+                live_load=SlabDesignFactors.psf_to_ksi(live_load_dict[cfg.name]),
+                superimposed_dead_load=SlabDesignFactors.psf_to_ksi(20),
+                slab_dead_load=SlabDesignFactors.psf_to_ksi(45),
+                façade_load=SlabDesignFactors.plf_to_kpi(500),
+                live_factor=DEFAULT_LIVE_FACTOR,
+                dead_factor=DEFAULT_DEAD_FACTOR,
+                beam_sizer=:discrete,
+                max_depth=DEFAULT_MAX_DEPTH,
+                beam_units=:in,
+                serviceability_lim=DEFAULT_SERV_LIM,
+                collinear=false,
+                drawn=true,
+                element_ids=type_information["element_ids"],
+                minimum_continuous=true,
+                n_max_sections=0,
+            )
+
+            slab_params = SlabDesignFactors.analyze_slab(slab_params)
+            slab_params, beam_sizing_params = SlabDesignFactors.optimal_beamsizer(slab_params, beam_sizing_params)
+            if isempty(beam_sizing_params.minimizers)
+                @warn "No minimizers for validation_mip" name=cfg.name
+            else
+                slab_results = SlabDesignFactors.postprocess_slab(slab_params, beam_sizing_params)
+                lock(append_lock) do
+                    SlabDesignFactors.append_results_to_csv(results_path * "/", results_name, [slab_results])
+                end
+            end
+        catch e
+            @warn "Failed validation_mip config" name=cfg.name exception=e
         end
     end
 end
@@ -949,6 +1161,9 @@ function analyze_experiments(
     if "material_scenario_mc" in studies
         run_material_scenario_mc(results_path)
     end
+    if "validation_mip" in studies
+        run_validation_mip(results_path)
+    end
 
     open(completion_file, "w") do f
         write(f, "Experiments complete")
@@ -959,7 +1174,7 @@ function main()
     args = ARGS
     if !(length(args) in (2, 3))
         println("Usage: julia executable_experiments.jl <results_path> <completion_file> [studies_csv]")
-        println("studies_csv options: max_depths, strip_resolution, constrained_inventory, nlp_solver_comparison, material_scenario_mc")
+        println("studies_csv options: max_depths, strip_resolution, constrained_inventory, nlp_solver_comparison, material_scenario_mc, validation_mip")
         return
     end
 
