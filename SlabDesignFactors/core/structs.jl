@@ -30,7 +30,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
     slab_type::Symbol              # :uniaxial or :isotropic
     load_type::Symbol              # :determinate or :indeterminate
     vector_1d::Vector{<:Real}      # Direction of uniaxial slab
-    slab_thickness::Real          # Slab thickness [in]
+    slab_thickness::Real          # Slab thickness [slab length units, typically m]
     perp::Bool                    # Whether to use the perpendicular direction
     perp_vector_1d::Vector{<:Real} # Perpendicular direction of orth_biaxial slab
     slab_sizer::Symbol             # :cellular or :uniform
@@ -40,6 +40,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
     areas::Vector{<:Real}         # Areas of each cell [-²]
     load_areas::Vector{<:Real}      # Area of strips [-²]
     load_volumes::Vector{<:Real}    # Volume of strips [-³]
+    load_widths::Vector{<:Real}     # Perpendicular tributary width at each strip sample point [-]
     max_spans::Vector{<:Real}     # Spans of each cell [-]
     slab_depths::Vector{<:Real}   # Depth of each cell [-]
     plot_context::PlotContext      # Plot context
@@ -67,6 +68,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
                               areas::Vector{<:Real}=Float64[],
                               load_areas::Vector{<:Real}=Float64[],
                               load_volumes::Vector{<:Real}=Float64[],
+                              load_widths::Vector{<:Real}=Float64[],
                               max_spans::Vector{<:Real}=Float64[],
                               slab_depths::Vector{<:Real}=Float64[],
                               plot_analysis::Bool=false,
@@ -88,7 +90,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
         element_id_lookup_df = get_element_id(model)
 
         new(model, slab_name, slab_type, load_type, vector_1d, slab_thickness, perp, perp_vector_1d, slab_sizer, fix_param, spacing, area, areas, 
-            load_areas, load_volumes, max_spans, slab_depths, plot_context, load_dictionary, trib_dictionary, record_tributaries, slab_units, raster_df, element_id_lookup_df, i_holes, i_perimeter)
+            load_areas, load_volumes, load_widths, max_spans, slab_depths, plot_context, load_dictionary, trib_dictionary, record_tributaries, slab_units, raster_df, element_id_lookup_df, i_holes, i_perimeter)
     end
 end
 
@@ -105,10 +107,11 @@ mutable struct SlabSizingParams
     live_load::Real              # Live load [load/area]
     superimposed_dead_load::Real  # Superimposed dead load [load/area]
     slab_dead_load::Real         # Slab dead load [load/area]
-    façade_load::Real            # Façade load [load/area]
+    façade_load::Real            # Façade line load [load/length], typically kip/in
     live_factor::Real             # Live load factor [-]
     dead_factor::Real            # Dead load factor [-]
     beam_sizer::Symbol              # :discrete or :continuous
+    nlp_solver::Symbol              # :MMA (NLopt LD_MMA) or :Ipopt
     max_depth::Real                  # Maximum allowable depth for the assembly
     beam_units::Symbol              # Unit of measurement for beams (:m, :mm, :in, :ft)
 
@@ -141,14 +144,34 @@ mutable struct SlabSizingParams
     collinear_minimizers::Vector{Vector{Float64}}  # Minimizers if collinear
     collinear_ids::Vector{String}  # Ids if collinear
     collinear_minimums::Vector{Float64}  # Minimums if collinear
+    collinear_groups::Vector{Int}  # Group ID per beam element (populated during sizing)
 
     # composite action
     composite_action::Bool           # Use composite stiffness for deflection checks
     E_c::Real                        # Concrete elastic modulus (ksi) for modular ratio
     slab_depth_in::Real              # Slab depth in beam units (in), set during sizing
+    deflection_reduction_factor::Real # Divide computed deflection by this before checking limit (e.g. 2.5 for bare steel w/ slab)
+    i_perimeter::Set{Int}            # Beam element indices on the slab perimeter (edge beams)
+
+    # staged deflection Ix floors (populated by outer convergence loop)
+    min_Ix_comp::Dict{Int,Float64}   # Per-beam composite Ix lower bound from staged verification
+    min_Ix_bare::Dict{Int,Float64}   # Per-beam bare-steel Ix lower bound from staged verification
+
+    # global deflection sanity check
+    max_bay_span::Real               # Largest column bay span in beam units (in), for global δ warning
+
+    # MIP baseline (populated when NLP runs MIP internally as a warm-start)
+    mip_result::Union{SlabSizingParams, Nothing}
+
+    # staged deflection convergence (populated by outer loop in optimal_beamsizer)
+    staged_converged::Bool           # true if staged deflection loop converged (or was not applicable)
+    staged_n_violations::Int         # number of beams still violating limits at exit (0 = converged)
 
     # setup values
     verbose::Bool                    # Whether to print detailed output
+
+    # material scenario (used by load generation + postprocessing for density/ECC)
+    concrete_material::ConcreteMaterial
     
     function SlabSizingParams(;
         model::Union{Asap.Model, Nothing}=nothing,
@@ -157,10 +180,11 @@ mutable struct SlabSizingParams
         live_load::Real=0.0,              # Live load [load/area]
         superimposed_dead_load::Real=0.0,  # Superimposed dead load [load/area] 
         slab_dead_load::Real=0.0,         # Slab dead load [load/area]
-        façade_load::Real=0.0,            # Façade load [load/area]
+        façade_load::Real=0.0,            # Façade line load [load/length], typically kip/in
         live_factor::Real=1.0,             # Live load factor [-]
         dead_factor::Real=1.0,            # Dead load factor [-]
         beam_sizer::Symbol=:discrete,         # :discrete or :continuous
+        nlp_solver::Symbol=:MMA,              # :MMA (NLopt LD_MMA) or :Ipopt
         max_depth::Real=0.0,                  # Maximum allowable depth for the assembly
 
         # default input values
@@ -193,22 +217,49 @@ mutable struct SlabSizingParams
         collinear_minimizers::Vector{Vector{Float64}}=Vector{Float64}[], # Minimizers if collinear
         collinear_ids::Vector{String}=String[],       # Ids if collinear
         collinear_minimums::Vector{Float64}=Float64[], # Minimums if collinear
+        collinear_groups::Vector{Int}=Int[],           # Group ID per beam element
 
         # composite action
         composite_action::Bool=false,         # Use composite stiffness for deflection
         E_c::Real=57.0 * sqrt(4000.0),          # Concrete E_c (ksi), = 57√(f'c_psi) for f'c = 4 ksi
         slab_depth_in::Real=0.0,              # Slab depth (in), populated during sizing
+        deflection_reduction_factor::Real=1.0, # Divide computed deflection by this (e.g. 2.5 for bare steel w/ slab)
+        i_perimeter::Set{Int}=Set{Int}(),     # Perimeter beam indices, populated during sizing
+
+        # staged deflection Ix floors (populated by outer convergence loop)
+        min_Ix_comp::Dict{Int,Float64}=Dict{Int,Float64}(),
+        min_Ix_bare::Dict{Int,Float64}=Dict{Int,Float64}(),
+
+        # global deflection sanity check
+        max_bay_span::Real=0.0,              # Largest column bay span in beam units (in)
+
+        # MIP baseline (auto-populated when NLP runs MIP as warm-start)
+        mip_result::Union{SlabSizingParams, Nothing}=nothing,
+
+        # staged deflection convergence
+        staged_converged::Bool=true,
+        staged_n_violations::Int=0,
 
         # setup values
-        verbose::Bool=false                   # Whether to print detailed output
+        verbose::Bool=false,                  # Whether to print detailed output
+
+        # material scenario
+        concrete_material::ConcreteMaterial=DEFAULT_CONCRETE,
     )
         @assert (beam_sizer in [:discrete, :continuous]) "Invalid beam sizing method."
+        @assert deflection_reduction_factor > 0 "deflection_reduction_factor must be > 0."
 
-        new(model, live_load, superimposed_dead_load, slab_dead_load, façade_load, live_factor, dead_factor, beam_sizer, max_depth,
+        # High-fidelity policy: when composite stiffness is explicitly modeled, do not
+        # also reduce deflection by an empirical factor (avoids double-counting stiffness).
+        drf = composite_action ? 1.0 : deflection_reduction_factor
+
+        new(model, live_load, superimposed_dead_load, slab_dead_load, façade_load, live_factor, dead_factor, beam_sizer, nlp_solver, max_depth,
             beam_units, max_assembly_depth, deflection_limit, minimum_continuous, collinear, drawn, element_ids,
             serviceability_lim, catalog_discrete, n_max_sections, area, w, self_weight, max_beam_depth, M_maxs, V_maxs,
             x_maxs, load_dictionary, load_df, minimizers, minimums, ids, collinear_minimizers, collinear_ids,
-            collinear_minimums, composite_action, E_c, slab_depth_in, verbose)
+            collinear_minimums, collinear_groups, composite_action, E_c, slab_depth_in, drf, i_perimeter,
+            min_Ix_comp, min_Ix_bare, max_bay_span, mip_result,
+            staged_converged, staged_n_violations, verbose, concrete_material)
     end
 end
 
@@ -216,58 +267,97 @@ end
 """
     SlabOptimResults
 
-Results of slab optimization, including mass, carbon footprint, and force data.
+Results of slab optimization, including mass, embodied carbon, internal forces,
+column sizing, and staged deflection analysis.
+
+Uses `@kwdef` so fields can be set by name — adding new fields only requires
+a default value, not updating every call site.
+
+# Staged deflection fields
+
+For unshored composite construction, deflections are decomposed by load stage:
+
+| Field           | Description                                          |
+|-----------------|------------------------------------------------------|
+| `δ_slab_dead`   | Slab DL deflection on bare steel Ix [in]           |
+| `δ_beam_dead`   | Beam self-weight deflection on bare steel [in]     |
+| `δ_sdl`         | SDL deflection on composite Ix [in]                |
+| `δ_live`        | Live load deflection on composite Ix [in]          |
+| `δ_total`       | Superposition of all stages [in]                   |
+| `Δ_limit_live`  | L/360 limit per beam [in]                          |
+| `Δ_limit_total` | L/240 limit per beam [in]                          |
+| `δ_live_ok`     | true if δ_live ≤ L/360                              |
+| `δ_total_ok`    | true if δ_total ≤ L/240                             |
 """
-mutable struct SlabOptimResults <: AbstractOptParams
-    slab_name::String               # Slab name
-    slab_type::Symbol               # Slab type
-    vector_1d::Vector{<:Real}      # Direction of uniaxial slab
-    slab_sizer::Symbol              # Slab sizer
-    beam_sizer::Symbol              # Beam sizer
-    area::Float64                   # Area
-    minimizers::Vector{Vector{Float64}}      # Imperial
-    minimums::Vector{Float64}       # Imperial
-    ids::Vector{String}             # Identifications
-    collinear::Union{Bool,Nothing}  # True/false collinear
-    max_depth::Real                 # Maximum depth [in]
-    mass_beams::Float64             # Mass of beams [kg]
-    norm_mass_beams::Float64        # Normalized mass of beams [kg/m^2]
-    embodied_carbon_beams::Float64  # Embodied carbon of beams [kg]
-    mass_slab::Float64              # Mass of slab [kg]
-    norm_mass_slab::Float64         # Normalized mass of slab [kg/m^2]
-    embodied_carbon_slab::Float64   # Embodied carbon of slab [kg]
-    mass_rebar::Float64             # Mass of rebar [kg]
-    norm_mass_rebar::Float64        # Normalized mass of rebar [kg/m^2]
-    embodied_carbon_rebar::Float64   # Embodied carbon of rebar [kg]
-    areas::Vector{Float64}           # Areas [in^2]
-    x::Vector{Vector{Float64}}                 # X-coordinates [m]
-    P::Vector{Vector{Float64}}                 # Loads [kN]
-    Px::Vector{Vector{Float64}}                # X-coordinates associated with loads [m]
-    My::Vector{Vector{Float64}}              # Moments [kNm]
-    Mn::Vector{Float64}             # Nominal moments [kNm]
-    Vy::Vector{Vector{Float64}}              # Shear forces [kN]
-    Vn::Vector{Float64}             # Nominal shear forces [kN]
-    Δ_local::Vector{Vector{Float64}}         # Local displacements [m]
-    Δ_global::Vector{Vector{Float64}}        # Global displacements [m]
-    sections::Vector{String}           # Sections
+@kwdef mutable struct SlabOptimResults <: AbstractOptParams
+    slab_name::String                          = ""
+    slab_type::Symbol                          = :uniaxial
+    vector_1d::Vector{Float64}                 = [1.0, 0.0]
+    slab_sizer::Symbol                         = :cellular
+    beam_sizer::Symbol                         = :continuous
+    area::Float64                              = 0.0
+    minimizers::Vector{Vector{Float64}}        = Vector{Float64}[Float64[]]
+    minimums::Vector{Float64}                  = [0.0]
+    ids::Vector{String}                        = [""]
+    collinear::Union{Bool,Nothing}             = nothing
+    max_depth::Float64                         = 0.0
+    mass_beams::Float64                        = 0.0
+    norm_mass_beams::Float64                   = 0.0
+    embodied_carbon_beams::Float64             = 0.0
+    mass_slab::Float64                         = 0.0
+    norm_mass_slab::Float64                    = 0.0
+    embodied_carbon_slab::Float64              = 0.0
+    mass_rebar::Float64                        = 0.0
+    norm_mass_rebar::Float64                   = 0.0
+    embodied_carbon_rebar::Float64             = 0.0
+    areas::Vector{Float64}                     = [0.0]
+    x::Vector{Vector{Float64}}                 = Vector{Float64}[Float64[]]
+    P::Vector{Vector{Float64}}                 = Vector{Float64}[Float64[]]
+    Px::Vector{Vector{Float64}}                = Vector{Float64}[Float64[]]
+    My::Vector{Vector{Float64}}                = Vector{Float64}[Float64[]]
+    Mn::Vector{Float64}                        = [0.0]
+    Vy::Vector{Vector{Float64}}                = Vector{Float64}[Float64[]]
+    Vn::Vector{Float64}                        = [0.0]
+    Δ_local::Vector{Vector{Float64}}           = Vector{Float64}[Float64[]]
+    Δ_global::Vector{Vector{Float64}}          = Vector{Float64}[Float64[]]
+    sections::Vector{String}                   = [""]
 
-    function SlabOptimResults(slab_name::String, slab_type::Symbol, vector_1d::Vector{<:Real}, slab_sizer::Symbol, beam_sizer::Symbol, area::Float64, minimizers::Vector{Vector{Float64}}, minimums::Vector{Float64}, ids::Vector{String}, collinear::Union{Bool,Nothing}, max_depth::Real, mass_beams::Float64, norm_mass_beams::Float64, embodied_carbon_beams::Float64, mass_slab::Float64, norm_mass_slab::Float64, embodied_carbon_slab::Float64, mass_rebar::Float64, norm_mass_rebar::Float64, embodied_carbon_rebar::Float64, areas::Vector{Float64}, x::Vector{Vector{Float64}}, P::Vector{Vector{Float64}}, Px::Vector{Vector{Float64}}, My::Vector{Vector{Float64}}, Mn::Vector{Float64}, Vy::Vector{Vector{Float64}}, Vn::Vector{Float64}, Δ_local::Vector{Vector{Float64}}, Δ_global::Vector{Vector{Float64}}, sections::Vector{String})
-        new(slab_name, slab_type, vector_1d, slab_sizer, beam_sizer, area, minimizers, minimums, ids, collinear, max_depth, mass_beams, norm_mass_beams, embodied_carbon_beams, mass_slab, norm_mass_slab, embodied_carbon_slab, mass_rebar, norm_mass_rebar, embodied_carbon_rebar, areas, x, P, Px, My, Mn, Vy, Vn, Δ_local, Δ_global, sections)
-    end
+    # --- Column results ---
+    col_sections::Vector{String}               = String[]
+    col_Pu::Vector{Float64}                    = Float64[]
+    col_ϕPn::Vector{Float64}                   = Float64[]
+    col_util::Vector{Float64}                  = Float64[]
+    mass_columns::Float64                      = 0.0
+    norm_mass_columns::Float64                 = 0.0
+    embodied_carbon_columns::Float64           = 0.0
 
-    function SlabOptimResults(max_depth::Float64=0.0, collinear::Union{Bool,Nothing}=nothing)
-        slab_name = ""
-        slab_type = :uniaxial
-        vector_1d = [1.0, 0.0]
-        slab_sizer = :cellular
-        beam_sizer = :continuous
-        area = mass_beams = norm_mass_beams = embodied_carbon_beams = mass_slab = norm_mass_slab = embodied_carbon_slab = mass_rebar = norm_mass_rebar = embodied_carbon_rebar = 0.0
-        minimizers = x = P = Px = My = Vy = Δ_local = Δ_global = Vector{Float64}[Float64[]]
-        minimums = areas = Mn = Vn = [0.0]
-        ids = sections = [""]
-        collinear = collinear
-        max_depth = max_depth
+    # --- Fireproofing results ---
+    mass_fireproofing::Float64                 = 0.0
+    norm_mass_fireproofing::Float64            = 0.0
+    embodied_carbon_fireproofing::Float64      = 0.0
 
-        new(slab_name, slab_type, vector_1d, slab_sizer, beam_sizer, area, minimizers, minimums, ids, collinear, max_depth, mass_beams, norm_mass_beams, embodied_carbon_beams, mass_slab, norm_mass_slab, embodied_carbon_slab, mass_rebar, norm_mass_rebar, embodied_carbon_rebar, areas, x, P, Px, My, Mn, Vy, Vn, Δ_local, Δ_global, sections)
-    end
+    # --- Staged deflection results (per beam) ---
+    δ_slab_dead::Vector{Float64}               = Float64[]
+    δ_beam_dead::Vector{Float64}               = Float64[]
+    δ_sdl::Vector{Float64}                     = Float64[]
+    δ_live::Vector{Float64}                    = Float64[]
+    δ_total::Vector{Float64}                   = Float64[]
+    Δ_limit_live::Vector{Float64}              = Float64[]
+    Δ_limit_total::Vector{Float64}             = Float64[]
+    δ_live_ok::Vector{Bool}                    = Bool[]
+    δ_total_ok::Vector{Bool}                   = Bool[]
+
+    # --- Global deflection sanity check ---
+    max_δ_total::Float64                       = 0.0
+    max_bay_span::Float64                      = 0.0
+    global_δ_ok::Bool                          = true
+
+    # --- Aggregate utilization ---
+    max_util_M::Float64                        = 0.0
+    max_util_V::Float64                        = 0.0
+    max_col_util::Float64                      = 0.0
+    n_L360_fail::Int                           = 0
+    i_L360_fail::Vector{Int}                   = Int[]
+    n_L240_fail::Int                           = 0
+    i_L240_fail::Vector{Int}                   = Int[]
 end

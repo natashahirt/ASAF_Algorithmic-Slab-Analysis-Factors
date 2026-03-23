@@ -1,5 +1,6 @@
 include("errors.jl")
 include("conversions.jl")
 include("constants.jl")
+include("materials.jl")
 include("structs.jl")
 include("structs_utils.jl")

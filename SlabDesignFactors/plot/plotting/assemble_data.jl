@@ -26,7 +26,16 @@ function assemble_data(files::Vector{String}; category_names::Vector{String}=Str
         @assert length(category_names) == length(files) "You need the same number of category names as files"
     end
 
-    df = DataFrame(category=String[], name=String[], area=Float64[], steel_norm=Float64[], concrete_norm=Float64[], rebar_norm=Float64[], max_depth=Float64[], slab_type=Symbol[], slab_sizer=Symbol[], beam_sizer=Symbol[], collinear=Bool[], symbol=Symbol[], rotation=Float64[], vector_1d_x=Float64[], vector_1d_y=Float64[], sections=Any[], ids=Any[], unique_sections=Int64[])
+    df = DataFrame(
+        category=String[], name=String[], area=Float64[],
+        steel_norm=Float64[], column_norm=Float64[],
+        concrete_norm=Float64[], rebar_norm=Float64[],
+        fireproofing_norm=Float64[],
+        max_depth=Float64[],
+        slab_type=Symbol[], slab_sizer=Symbol[], beam_sizer=Symbol[],
+        collinear=Bool[], symbol=Symbol[], rotation=Float64[],
+        vector_1d_x=Float64[], vector_1d_y=Float64[],
+        sections=Any[], ids=Any[], unique_sections=Int64[])
 
     for (i,filename) in enumerate(files)
 
@@ -37,16 +46,25 @@ function assemble_data(files::Vector{String}; category_names::Vector{String}=Str
         if !hasproperty(df_slab, :unique_sections)
             df_slab.unique_sections .= 0
         end
+        if !hasproperty(df_slab, :column_norm)
+            df_slab.column_norm .= 0.0
+        end
+        if !hasproperty(df_slab, :fireproofing_norm)
+            df_slab.fireproofing_norm .= 0.0
+        end
 
         df = vcat(df, df_slab)
     
     end
 
     df.steel_ec = df.steel_norm .* ECC_STEEL
+    df.column_ec = df.column_norm .* ECC_STEEL
     df.concrete_ec = df.concrete_norm .* ECC_CONCRETE
     df.rebar_ec = df.rebar_norm .* ECC_REBAR
+    df.fireproofing_ec = df.fireproofing_norm .* ECC_CONCRETE
     df.slab_ec = df.concrete_ec + df.rebar_ec
-    df.total_ec = df.steel_ec + df.concrete_ec + df.rebar_ec
+    df.total_ec = df.steel_ec + df.concrete_ec + df.rebar_ec + df.fireproofing_ec
+    df.total_ec_with_columns = df.total_ec + df.column_ec
     df.row .= 0
     df.col .= 0
     df.rowcol .= ""
