@@ -8,45 +8,35 @@ struct TrussFrame <: AbstractGenerator
     single_base::Bool
     loaded_nodes::Symbol
 
-    function TrussFrame(nx::Integer, dx::Real, ny::Integer, dy::Real, section::Asap.AbstractSection, load = [0.0u"N", -10.0u"N", 0.0u"N"]; single_base = false, loaded_nodes = :row2)
+    function TrussFrame(nx::Integer, dx::Real, ny::Integer, dy::Real, section::Asap.AbstractSection, load = [0.0, -10.0, 0.0]; single_base = false, loaded_nodes = :row2)
 
         #checks
         @assert nx % 2 == 0 "nx must be even"
         @assert in(loaded_nodes, [:col1, :col2, :col3, :col4, :row1, :row2]) "loaded_nodes must be one of: :col1, :col2, :col3, :col4, :row1, :row2"
     
-        #left most columns - promote to Unitful
-        col1 = [TrussNode([0.0u"m", (dy * n) * u"m", 0.0u"m"], :free, :col1) for n = 0:ny]
+        col1 = [TrussNode([0.0, dy * n, 0.0], :free, :col1) for n = 0:ny]
 
-        #pin support
         fixnode!(col1[1], :pinned)
         col1[1].id = :support
         
-        #col2 
-        col2 = [TrussNode([dx * u"m", (dy * n) * u"m", 0.0u"m"], :free, :col2) for n = 0:ny]
+        col2 = [TrussNode([dx, dy * n, 0.0], :free, :col2) for n = 0:ny]
 
-        #pin support
         fixnode!(col2[1], :pinned)
         col2[1].id = :support
         
-        #col1
-        col3 = [TrussNode([(nx-1) * dx * u"m", (dy * n) * u"m", 0.0u"m"], :free, :col3) for n = 0:ny]
+        col3 = [TrussNode([(nx-1) * dx, dy * n, 0.0], :free, :col3) for n = 0:ny]
 
-        #pin support
         fixnode!(col3[1], :pinned)
         col3[1].id = :support
         
-        #col2 
-        col4 = [TrussNode([nx * dx * u"m", (dy * n) * u"m", 0.0u"m"], :free, :col4) for n = 0:ny]
+        col4 = [TrussNode([nx * dx, dy * n, 0.0], :free, :col4) for n = 0:ny]
 
-        #pin support
         fixnode!(col4[1], :pinned)
         col4[1].id = :support
         
-        #row1
-        row1 = [TrussNode([(dx + dx * n) * u"m", (ny * dy) * u"m", 0.0u"m"], :free, :row1) for n = 1:nx-3]
+        row1 = [TrussNode([dx + dx * n, ny * dy, 0.0], :free, :row1) for n = 1:nx-3]
         
-        #row 2
-        row2 = [TrussNode([(dx + dx * n) * u"m", ((ny - 1) * dy) * u"m", 0.0u"m"], :free, :row2) for n = 1:nx-3]
+        row2 = [TrussNode([dx + dx * n, (ny - 1) * dy, 0.0], :free, :row2) for n = 1:nx-3]
         
         #column chords
         e_c1 = single_base ? [TrussElement(col1[[i, i+1]]..., section, :col1chord) for i = 2:ny] : [TrussElement(col1[[i, i+1]]..., section, :col1chord) for i = 1:ny]

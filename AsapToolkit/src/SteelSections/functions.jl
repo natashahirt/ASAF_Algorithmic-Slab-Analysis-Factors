@@ -55,51 +55,46 @@ function get_section(name::String)
     if haskey(SECTION_CACHE, key)
         return SECTION_CACHE[key]
     else
-        error("Section '$name' (cleaned: '$key') not found in AISC database.")
+        error("Section '$name' (cleaned: '$key') was not found in AISC database.")
     end
 end
 
-# convert units using Unitful - returns Unitful Section
-function toASAPframe(section::TorsionAllowed, E::Quantity, G::Quantity; unit = u"mm", ρ = 7850.0u"kg/m^3")
-    # Section properties already have Unitful units (mm², mm⁴, etc.)
-    # Convert directly to SI - no need to multiply by unit^n
-    A = uconvert(u"m^2", section.A)
-    E_si = uconvert(u"Pa", E)
-    G_si = uconvert(u"Pa", G)
-    Ix = uconvert(u"m^4", section.Ix)
-    Iy = uconvert(u"m^4", section.Iy)
-    J = uconvert(u"m^4", section.J)
-    ρ_si = uconvert(u"kg/m^3", ρ)
-    
-    return Asap.Section(A, E_si, G_si, Ix, Iy, J, ρ_si)
+# Geometry from the database is in mm / mm² / mm⁴ (etc.); Asap expects SI (m, m², m⁴).
+const _MM2_TO_M2 = 1e-6
+const _MM4_TO_M4 = 1e-12
+
+"""
+    toASAPframe(section::TorsionAllowed, E, G; ρ = 7850.0)
+
+Build an `Asap.Section` from tabulated metric properties. `E` and `G` are in Pa; `ρ` is kg/m³.
+Section areas and inertias are converted from mm units to SI.
+"""
+function toASAPframe(section::TorsionAllowed, E::Real, G::Real; ρ::Real = 7850.0)
+    A = section.A * _MM2_TO_M2
+    Ix = section.Ix * _MM4_TO_M4
+    Iy = section.Iy * _MM4_TO_M4
+    J = section.J * _MM4_TO_M4
+    return Asap.Section(A, E, G, Ix, Iy, J, ρ)
 end
 
-# only using section name
-function toASAPframe(name::String, E::Quantity, G::Quantity; unit = u"mm", ρ = 7850.0u"kg/m^3")
-    return toASAPframe(get_section(name), E, G; unit = unit, ρ = ρ)
+function toASAPframe(name::String, E::Real, G::Real; ρ::Real = 7850.0)
+    return toASAPframe(get_section(name), E, G; ρ = ρ)
 end
 
-# including standard defaults
-function toASAPframe(name::String; E = 200u"GPa", G = 77u"GPa", unit = u"mm", ρ = 7850.0u"kg/m^3")
-    return toASAPframe(name, E, G; unit = unit, ρ = ρ)
+function toASAPframe(name::String; E::Real = 200e9, G::Real = 77e9, ρ::Real = 7850.0)
+    return toASAPframe(name, E, G; ρ = ρ)
 end
 
-# fallback for Real (promotes to Unitful)
-function toASAPframe(section::TorsionAllowed, E::Real, G::Real; unit = u"mm", ρ::Real = 7850.0)
-    return toASAPframe(section, E * u"Pa", G * u"Pa"; unit = unit, ρ = ρ * u"kg/m^3")
+"""
+    toASAPtruss(section::AbstractSection, E; ρ = 7850.0)
+
+`E` in Pa; `ρ` in kg/m³. Area is converted from mm² to m².
+"""
+function toASAPtruss(section::AbstractSection, E::Real; ρ::Real = 7850.0)
+    A = section.A * _MM2_TO_M2
+    return Asap.TrussSection(A, E, ρ)
 end
 
-# convert units using Unitful - returns Unitful TrussSection
-function toASAPtruss(section::AbstractSection, E::Quantity; unit = u"mm", ρ = 7850.0u"kg/m^3")
-    # Section properties already have Unitful units - convert directly to SI
-    A = uconvert(u"m^2", section.A)
-    E_si = uconvert(u"Pa", E)
-    ρ_si = uconvert(u"kg/m^3", ρ)
-    
-    return Asap.TrussSection(A, E_si, ρ_si)
-end
-
-# fallback for Real (promotes to Unitful)
-function toASAPtruss(section::AbstractSection, E::Real; unit = u"mm", ρ::Real = 7850.0)
-    return toASAPtruss(section, E * u"Pa"; unit = unit, ρ = ρ * u"kg/m^3")
+function toASAPtruss(name::String, E::Real; ρ::Real = 7850.0)
+    return toASAPtruss(get_section(name), E; ρ = ρ)
 end

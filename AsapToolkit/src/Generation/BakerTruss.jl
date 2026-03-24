@@ -19,7 +19,7 @@ struct BakerTruss <: AbstractGenerator
 end
 
 """
-    BakerTruss(nbays, dx, dy, section; load = [0.0u"N", -10.0u"N", 0.0u"N"])
+    BakerTruss(nbays, dx, dy, section; load = [0.0, -10.0, 0.0])
 
 Generate a 2D modified Baker truss.
 
@@ -28,9 +28,9 @@ Generate a 2D modified Baker truss.
 - `dx::Real` x-spacing of bays (meters)
 - `dy::Real` y-spacing of bays (meters)
 - `section::Asap.AbstractSection` cross section of bars
-- `load::Vector{QuantityForce}` Load applied to free bottom nodes
+- `load::Vector{<:Real}` load (N) applied to free bottom nodes
 """
-function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSection, load = [0.0u"N", -10.0u"N", 0.0u"N"])
+function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSection, load = [0.0, -10.0, 0.0])
 
     @assert nbays % 2 == 0 "n must be even"
     n = nbays + 1
@@ -40,7 +40,7 @@ function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSe
     for i = 1:n
         xposition = dx * (i - 1)
 
-        node = TrussNode([xposition * u"m", 0.0u"m", 0.0u"m"], :free)
+        node = TrussNode([xposition, 0.0, 0.0], :free)
         if i == 1
             node.dof = [false, false, false]
             node.id = :pin
@@ -59,7 +59,7 @@ function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSe
     for i = 1:n
         xposition = dx * (i - 1)
 
-        node = TrussNode([xposition * u"m", dy * u"m", 0.0u"m"], :free, :top)
+        node = TrussNode([xposition, dy, 0.0], :free, :top)
 
         push!(topnodes, node)
     end
@@ -73,7 +73,7 @@ function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSe
     for i = 1:nbays/2
         xposition = x0 + (i - 1) * dx
 
-        node = TrussNode([xposition * u"m", (dy/2) * u"m", 0.0u"m"], :free, :web)
+        node = TrussNode([xposition, dy/2, 0.0], :free, :web)
 
         push!(webleft, node)
     end
@@ -84,7 +84,7 @@ function BakerTruss(nbays::Integer, dx::Real, dy::Real, section::Asap.AbstractSe
     for i = 1:nbays/2
         xposition = x0 + (i - 1) * dx
 
-        node = TrussNode([xposition * u"m", (dy/2) * u"m", 0.0u"m"], :free, :web)
+        node = TrussNode([xposition, dy/2, 0.0], :free, :web)
 
         push!(webright, node)
     end

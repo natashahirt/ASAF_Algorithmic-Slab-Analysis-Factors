@@ -6,7 +6,7 @@ struct SpaceFrameBeam <: AbstractGenerator
     dz::Real
     section::Asap.AbstractSection
     
-    function SpaceFrameBeam(n::Integer, dx::Real, dy::Real, dz::Real, section::Asap.AbstractSection, load = [0.0u"N", 0.0u"N", -10.0u"N"])
+    function SpaceFrameBeam(n::Integer, dx::Real, dy::Real, dz::Real, section::Asap.AbstractSection, load = [0.0, 0.0, -10.0])
 
         @assert n % 2 == 0 "n must be even"
 
@@ -22,18 +22,16 @@ struct SpaceFrameBeam <: AbstractGenerator
         z_bottom = zero(x_positions)
         z_top = fill(dz, length(x_positions))
 
-        #make bottom nodes - promote to Unitful
-        bottom_nodes = [TrussNode([x * u"m", y * u"m", z * u"m"], :free, :bottom) for (x,y,z) in zip(x_positions, y_bottom, z_bottom)]
+        bottom_nodes = [TrussNode([x, y, z], :free, :bottom) for (x,y,z) in zip(x_positions, y_bottom, z_bottom)]
 
-        #top nodes 1
-        top1_nodes = [TrussNode([x * u"m", y * u"m", z * u"m"], :free, :top1) for (x,y,z) in zip(x_positions, y_top1, z_top)]
+        top1_nodes = [TrussNode([x, y, z], :free, :top1) for (x,y,z) in zip(x_positions, y_top1, z_top)]
         first(top1_nodes).id = :pin
         fixnode!(first(top1_nodes), :pinned)
         last(top1_nodes).id = :roller
         fixnode!(last(top1_nodes), :xfree)
 
         #top nodes 2
-        top2_nodes = [TrussNode([x * u"m", y * u"m", z * u"m"], :free, :top2) for (x,y,z) in zip(x_positions, y_top2, z_top)]
+        top2_nodes = [TrussNode([x, y, z], :free, :top2) for (x,y,z) in zip(x_positions, y_top2, z_top)]
         first(top2_nodes).id = :pin
         fixnode!(first(top2_nodes), :pinned)
         last(top2_nodes).id = :roller

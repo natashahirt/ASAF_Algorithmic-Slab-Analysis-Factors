@@ -65,13 +65,13 @@ function compute_M_V_from_triplets(triplets, model; resolution=200)
     Ls = [el.length for el in elements]
     Rs = [el.R[1:3, 1:3] for el in elements]
     disps = [vcat(el.nodeStart.displacement, el.nodeEnd.displacement) for el in elements]
-    r2dofs = [AsapToolkit.release2DOF[AsapToolkit.get_release(el)] for el in elements]
+    r2dofs = [AsapToolkit.release2DOF[AsapToolkit.get_release_type(el)] for el in elements]
     Flocals = [(el.R * el.K * disp) .* r2dof for (el, disp, r2dof) in zip(elements, disps, r2dofs)]
     Vystarts = [F[2] for F in Flocals]
     Mystarts = [F[6] for F in Flocals]
     xrel = collect(0:(resolution - 1)) ./ (resolution - 1)  # relative positions
     xincs = [xrel .* Ls[i] for i in 1:n_beams]  # scale by each beam's length
-    releases = [AsapToolkit.get_release(el) for el in elements]
+    releases = [AsapToolkit.get_release_type(el) for el in elements]
     moment_fns = [AsapToolkit.MPointLoad[r] for r in releases]
     shear_fns = [AsapToolkit.VPointLoad[r] for r in releases]
 

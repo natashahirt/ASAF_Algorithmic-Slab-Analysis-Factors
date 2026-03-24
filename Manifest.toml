@@ -188,7 +188,7 @@ uuid = "d81720e7-9d76-4c66-a69e-8f07ca321cc4"
 version = "0.1.0"
 
 [[deps.AsapToolkit]]
-deps = ["Asap", "Interpolations", "JSON", "LinearAlgebra", "Reexport", "SparseArrays", "Statistics", "Unitful", "XLSX"]
+deps = ["Asap", "Interpolations", "JSON", "LinearAlgebra", "Reexport", "SparseArrays", "Statistics", "XLSX"]
 path = "AsapToolkit"
 uuid = "45845293-de45-4074-bf34-b603320deb79"
 version = "0.1.0"

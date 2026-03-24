@@ -68,8 +68,7 @@ function to_truss(network::Network, section::Asap.AbstractSection)
 
     #convert loads
     for node in network.nodes
-        # Promote position to Unitful (Float64 → Quantity)
-        pos = [node.x * u"m", node.y * u"m", node.z * u"m"]
+        pos = [node.x, node.y, node.z]
         id = node.id
 
         dof = node.dof ? :free : :pinned

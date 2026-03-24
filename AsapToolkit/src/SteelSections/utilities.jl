@@ -42,30 +42,31 @@ colDict = Dict(
 
 names = data[:, colDict[:name]]
 
-const field_units = Dict(
+# Multipliers from raw spreadsheet values to plain Float64 in mm, mm², mm³, mm⁴, mm⁶ as appropriate.
+const field_scales = Dict(
     :name => nothing,
     :name_imperial => nothing,
-    :A => u"mm^2",
-    :d => u"mm",
-    :b => u"mm",
-    :bf => u"mm",
-    :tw => u"mm",
-    :tf => u"mm",
-    :t => u"mm",
-    :Ix => 1e6 * u"mm^4",
-    :Zx => 1e3 * u"mm^3",
-    :Sx => 1e3 * u"mm^3",
-    :rx => u"mm",
-    :Iy => 1e6 * u"mm^4",
-    :Zy => 1e3 * u"mm^3",
-    :Sy => 1e3 * u"mm^3",
-    :ry => u"mm",
-    :J => 1e3 * u"mm^4",
-    :Cw => 1e9 * u"mm^6",
-    :Ht => u"mm",
-    :B => u"mm",
-    :tHSS => u"mm",
-    :OD => u"mm"
+    :A => 1.0,
+    :d => 1.0,
+    :b => 1.0,
+    :bf => 1.0,
+    :tw => 1.0,
+    :tf => 1.0,
+    :t => 1.0,
+    :Ix => 1e6,
+    :Zx => 1e3,
+    :Sx => 1e3,
+    :rx => 1.0,
+    :Iy => 1e6,
+    :Zy => 1e3,
+    :Sy => 1e3,
+    :ry => 1.0,
+    :J => 1e3,
+    :Cw => 1e9,
+    :Ht => 1.0,
+    :B => 1.0,
+    :tHSS => 1.0,
+    :OD => 1.0
 )
 
 const Wfields = [:name, :name_imperial, :A, :d, :bf, :tw, :tf, :Ix, :Zx, :Sx, :rx, :Iy, :Zy, :Sy, :ry, :J, :Cw]
@@ -89,16 +90,15 @@ macro SteelSections(typeName, superType, fields, range)
                     imperial_names = data[:, colDict[:name_imperial]]
                     irow = findfirst(imperial_names .== name)
                 end
-                @assert !isnothing(irow) "Section name '$name' not found in Metric or Imperial records."
+                @assert !isnothing(irow) "Section name '$name' was not found in Metric or Imperial records."
                 
                 vals = Any[data[irow, colDict[f]] for f in $fields]
                 
-                # Apply Unitful units and multipliers
                 for i in 3:length(vals)
                     f = $(fields)[i]
-                    u = get(field_units, f, nothing)
-                    if !isnothing(u)
-                        vals[i] *= u
+                    s = get(field_scales, f, nothing)
+                    if !isnothing(s)
+                        vals[i] = Float64(vals[i]) * s
                     end
                 end
                 

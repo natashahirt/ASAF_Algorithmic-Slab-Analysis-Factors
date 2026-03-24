@@ -39,7 +39,7 @@ function process_continuous_beams_topopt_upsidedown(self::SlabAnalysisParams, pa
         beam_id = get_element_id(beam_elements[i])
         row_indices = findall(x -> x == beam_id, self.raster_df.beam_id)
         uglobal = [beam_elements[i].nodeStart.displacement; beam_elements[i].nodeEnd.displacement]
-        release = AsapToolkit.get_release(beam_elements[i])
+        release = AsapToolkit.get_release_type(beam_elements[i])
         r2dof = AsapToolkit.release2DOF[release]
         Flocal = (beam_elements[i].R * beam_elements[i].K * uglobal) .* r2dof
         xinc = collect(range(0, beam_elements[i].length, resolution))
