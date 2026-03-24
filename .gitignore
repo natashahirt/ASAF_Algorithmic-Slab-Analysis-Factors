@@ -24,3 +24,4 @@ Documentation/
 outputs/
 Manifest.toml
 Project.toml
+secrets/

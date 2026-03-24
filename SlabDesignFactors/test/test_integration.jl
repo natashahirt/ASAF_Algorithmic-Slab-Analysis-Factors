@@ -33,6 +33,19 @@ Verified physical invariants:
 """
 
 using Test
+using Gurobi
+
+"""True if a Gurobi license is available (discrete / MIP beam sizing)."""
+function _gurobi_available()
+    try
+        Gurobi.Env()
+        return true
+    catch
+        return false
+    end
+end
+
+const GUROBI_AVAILABLE = _gurobi_available()
 
 main_path = joinpath(@__DIR__, "..", "..", "Geometries", "topology")
 
@@ -95,6 +108,11 @@ end
 """Check whether a result is valid (non-empty, positive mass)."""
 result_ok(r) = length(r.minimizers) >= 1 && r.norm_mass_beams > 0
 
+if !GUROBI_AVAILABLE
+    @info "Gurobi license not found — skipping Integration — MIP (discrete) tests."
+end
+
+if GUROBI_AVAILABLE
 @testset "Integration — MIP (discrete)" begin
 
     for json_file in geom_files
@@ -250,6 +268,7 @@ result_ok(r) = length(r.minimizers) >= 1 && r.norm_mass_beams > 0
         GC.gc()
     end
 end
+end # GUROBI_AVAILABLE
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  NLP (continuous) tests — smaller geometries only (NLP is much slower)
@@ -370,6 +389,7 @@ end
 #  MIP vs NLP comparison — NLP (continuous) should be a lower bound on MIP
 #  Uses drf=2.5 bare steel (feasible for both solvers).
 # ══════════════════════════════════════════════════════════════════════════════
+if GUROBI_AVAILABLE
 @testset "MIP vs NLP comparison" begin
 
     for json_file in nlp_geom_files
@@ -407,6 +427,9 @@ end
 
         GC.gc()
     end
+end
+else
+    @info "Skipping MIP vs NLP comparison (Gurobi not available)."
 end
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -593,6 +616,11 @@ function run_pipeline_nodefl(geometry_dict; composite::Bool=false,
     return results, slab_params, sizing_params
 end
 
+if !GUROBI_AVAILABLE
+    @info "Skipping Integration — strength only (requires Gurobi for discrete sizing)."
+end
+
+if GUROBI_AVAILABLE
 @testset "Integration — strength only (deflection_limit=false)" begin
 
     for json_file in nodefl_geom_files
@@ -647,5 +675,6 @@ end
         GC.gc()
     end
 end
+end # GUROBI_AVAILABLE
 
 println("\nAll integration tests complete.")

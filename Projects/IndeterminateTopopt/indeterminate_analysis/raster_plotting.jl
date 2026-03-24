@@ -1,4 +1,5 @@
-function plot_centerpoint_lines(slab_params::SlabAnalysisParams; centerpoint_id::Int=0, reset_plot::Bool=true, text::Bool=true, ax::Union{Nothing, Axis}=nothing)
+# CairoMakie Axis not used here so file loads without `using CairoMakie` (headless).
+function plot_centerpoint_lines(slab_params::SlabAnalysisParams; centerpoint_id::Int=0, reset_plot::Bool=true, text::Bool=true, ax::Union{Nothing, Any}=nothing)
     
     if (isnothing(slab_params.plot_context.fig) || reset_plot) && isnothing(ax)
         slab_params.plot_context = setup_plot(slab_params.plot_context.plot; size=(1200, 800))

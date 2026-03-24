@@ -25,6 +25,10 @@ set -euo pipefail
 module load julia
 module load gurobi
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Optional: secrets/gurobi.lic in repo (see env_gurobi.sh).
+[[ -f "${REPO_ROOT}/env_gurobi.sh" ]] && source "${REPO_ROOT}/env_gurobi.sh"
+
 mkdir -p outputs
 
 RESULTS_PATH="${1:-SlabDesignFactors/results/remote_results_experiments}"

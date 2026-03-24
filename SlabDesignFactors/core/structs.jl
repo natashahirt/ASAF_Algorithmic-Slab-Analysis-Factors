@@ -10,11 +10,11 @@ Context for plotting.
 # Fields
 """
 mutable struct PlotContext
-    plot::Bool                              # Plotting flag
-    fig::Union{Figure,Nothing}              # Figure handle
-    ax::Union{Axis,Nothing}                 # Axis handle
+    plot::Bool   # Plotting flag
+    fig::Any     # CairoMakie Figure (or nothing when headless / no plot)
+    ax::Any      # CairoMakie Axis (or nothing when headless / no plot)
 
-    function PlotContext(plot::Bool, fig::Union{Figure,Nothing}, ax::Union{Axis,Nothing})
+    function PlotContext(plot::Bool, fig=nothing, ax=nothing)
         new(plot, fig, ax)
     end
 end
