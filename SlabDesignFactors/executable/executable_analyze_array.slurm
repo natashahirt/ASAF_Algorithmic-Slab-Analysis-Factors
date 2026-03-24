@@ -17,6 +17,9 @@ module load community-modules
 module load julia
 module load gurobi
 
+# Batch nodes: skip CairoMakie (avoids Glib_jll / system glib symbol mismatches like g_dir_unref).
+export SLABDESIGN_SKIP_MAKIE="${SLABDESIGN_SKIP_MAKIE:-1}"
+
 if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   REPO_ROOT="${SLURM_SUBMIT_DIR}"
 else
