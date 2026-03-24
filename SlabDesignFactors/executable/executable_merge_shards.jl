@@ -1,3 +1,8 @@
+using Pkg
+# Repo root: SlabDesignFactors/executable/ → ../..
+const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(_REPO_ROOT)
+
 using CSV
 using DataFrames
 
@@ -109,4 +114,6 @@ function main()
     merge_shards(args[1], args[2], args[3])
 end
 
-main()
+if !isempty(PROGRAM_FILE) && abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main()
+end

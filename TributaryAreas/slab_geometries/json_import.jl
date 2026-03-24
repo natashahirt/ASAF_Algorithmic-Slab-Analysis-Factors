@@ -1,4 +1,20 @@
 """
+    geometry_dict_from_json_path(path::String) -> Dict
+
+Read a geometry JSON file. Many files in this repo store a **JSON string** whose value is
+another JSON document (double-encoded). Each `JSON.parse` step must use `dicttype=Dict`;
+otherwise the outer parse returns `JSON.Object`, which does not match `generate_from_json(::Dict)`.
+"""
+function geometry_dict_from_json_path(path::String)
+    json_string = replace(read(path, String), "\\n" => "")
+    first_parse = JSON.parse(json_string, dicttype=Dict)
+    if first_parse isa AbstractString
+        return JSON.parse(first_parse, dicttype=Dict)
+    end
+    return first_parse::Dict
+end
+
+"""
     generate_from_json(dict::Dict; plot=true, sections::Vector=[], drawn::Bool=false)
 
 Generate a structural model from a JSON-like dictionary.

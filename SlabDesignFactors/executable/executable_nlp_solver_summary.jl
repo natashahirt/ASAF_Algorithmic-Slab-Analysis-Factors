@@ -1,3 +1,7 @@
+using Pkg
+const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(_REPO_ROOT)
+
 using CSV
 using DataFrames
 using Statistics

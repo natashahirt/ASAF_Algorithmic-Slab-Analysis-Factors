@@ -1,3 +1,5 @@
+include(joinpath(@__DIR__, "_license_env.jl"))
+
 println("Loading project via _scripts.jl...")
 include("../scripts/_scripts.jl")
 

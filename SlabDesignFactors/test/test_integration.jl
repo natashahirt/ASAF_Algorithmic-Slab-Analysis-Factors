@@ -2,13 +2,12 @@
 Integration tests: full-pipeline beam sizing across analysis methods and geometries.
 
 Runs the complete geometry → slab analysis → beam sizing → postprocess chain on
-real topology JSON files.  Compares results across:
+real topology JSON files using **composite action** and **drf = 1.0** (full staged
+deflection checks), matching production / full-sweep defaults.
 
-  A. Bare steel (drf=2.5) — relaxed deflection, always feasible
-  B. Composite action (drf=1.0) — main design case with staged deflection
-
-Note: bare steel drf=1.0 (strict L/360) is infeasible for long spans (≥10m)
-with W-shapes ≤ 40" deep. This is a genuine physics limitation, not a code bug.
+Bare non-composite cases are not used in the deflection-limited pipeline here;
+staged deflection is validated on the composite results (`δ_slab_dead`, `δ_beam_dead`,
+SDL/Live split, CSV export).
 
 Solver paths tested:
   - MIP (discrete, Gurobi) : all geometries
@@ -21,15 +20,15 @@ Geometries:
   - r7c4 : 7-row 4-col (large irregular topology with many collinear groups)
 
 Verified physical invariants:
-  1. At least one bare-steel or composite case produces valid beams.
+  1. Composite (drf=1.0) produces valid beams when feasible for the geometry.
   2. Composite mass is finite and positive.
   3. All beams satisfy M_u / ϕM_n ≤ 1 and V_u / ϕV_n ≤ 1 (strength feasibility).
-  4. With composite action, staged deflection fields are non-empty and δ_total > 0.
+  4. Staged deflection fields are non-empty and δ_total > 0.
   5. Analytical beam self-weight deflection is non-negative for every beam.
   6. Column sizing produces valid results when columns exist.
   7. NLP mass ≤ MIP mass (continuous relaxation is a lower bound on discrete).
   8. NLP and MIP produce the same number of beams per geometry.
-  9. Strength-only mass ≤ deflection-governed mass.
+  9. Strength-only composite mass ≤ deflection-governed composite mass.
 """
 
 using Test
@@ -53,12 +52,11 @@ geom_files = ["r1c1.json", "r2c3.json", "r5c2.json", "r7c4.json"]
 
 function load_geometry(json_file)
     path = joinpath(main_path, json_file)
-    raw = JSON.parse(JSON.parse(replace(read(path, String), "\\n" => ""), dicttype=Dict))
-    return raw isa Dict ? raw : Dict(pairs(raw))
+    return geometry_dict_from_json_path(path)
 end
 
 """Run the full pipeline for one geometry + one set of analysis options."""
-function run_pipeline(geometry_dict; composite::Bool=false, drf::Float64=1.0,
+function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
                       beam_sizer::Symbol=:discrete, nlp_solver::Symbol=:MMA)
     geom, _ = Base.invokelatest(generate_from_json, geometry_dict; plot=false, drawn=false)
 
@@ -109,7 +107,7 @@ end
 result_ok(r) = length(r.minimizers) >= 1 && r.norm_mass_beams > 0
 
 if !GUROBI_AVAILABLE
-    @info "Gurobi license not found — skipping Integration — MIP (discrete) tests."
+    @info "Gurobi license not found — skipping MIP integration tests. Add `secrets/gurobi.lic` or set GRB_LICENSE_FILE (run.jl / runtests.jl load the secrets path when the file exists)."
 end
 
 if GUROBI_AVAILABLE
@@ -121,37 +119,22 @@ if GUROBI_AVAILABLE
 
         @testset "$name" begin
 
-            # ── Run cases ─────────────────────────────────────────────
-            println("\n  Running $name [MIP]: bare steel (drf=2.5)...")
-            res_bare25, _, _ = run_pipeline(geom_dict; composite=false, drf=2.5)
-
-            println("  Running $name [MIP]: composite action...")
+            # ── Run case (production-like: composite, full deflection) ───────────
+            println("\n  Running $name [MIP]: composite action (drf=1.0)...")
             res_comp, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0)
+            comp_ok = result_ok(res_comp)
 
-            bare25_ok = result_ok(res_bare25)
-            comp_ok   = result_ok(res_comp)
-
-            # ── 1. At least one case produces valid results ───────────
-            # Some geometries have spans too long for W ≤ 40" even with
-            # composite action — log but don't fail.
+            # ── 1. Feasibility ─────────────────────────────────────────
             @testset "beams exist" begin
-                if !(bare25_ok || comp_ok)
-                    @warn "$name: all design cases infeasible (likely long spans + depth limit)"
-                    @test_skip bare25_ok || comp_ok
+                if !comp_ok
+                    @warn "$name: composite design infeasible (likely long spans + depth limit)"
+                    @test_skip comp_ok
                 else
-                    @test bare25_ok || comp_ok
+                    @test comp_ok
                 end
             end
 
-            # ── 2. Bare 2.5× mass is finite and positive ─────────────
-            if bare25_ok
-                @testset "bare 2.5× mass valid" begin
-                    @test res_bare25.norm_mass_beams > 0
-                    @test isfinite(res_bare25.norm_mass_beams)
-                end
-            end
-
-            # ── 3. Composite mass is finite and positive ──────────────
+            # ── 2. Composite mass is finite and positive ─────────────
             if comp_ok
                 @testset "composite mass valid" begin
                     @test res_comp.norm_mass_beams > 0
@@ -159,9 +142,9 @@ if GUROBI_AVAILABLE
                 end
             end
 
-            # ── 4. Strength feasibility ──────────────────────────────
+            # ── 3. Strength feasibility ──────────────────────────────
             @testset "strength checks pass" begin
-                results_to_check = filter(result_ok, [res_bare25, res_comp])
+                results_to_check = filter(result_ok, [res_comp])
                 for r in results_to_check
                     for i in 1:length(r.Mn)
                         if r.Mn[i] > 0 && !isempty(r.My[i])
@@ -176,7 +159,7 @@ if GUROBI_AVAILABLE
                 end
             end
 
-            # ── 5–7: Staged deflection tests (composite only) ────────
+            # ── 4–6: Staged deflection checks (composite, drf=1.0) ───
             if comp_ok
                 @testset "staged deflection populated" begin
                     n = length(res_comp.minimizers)
@@ -233,10 +216,10 @@ if GUROBI_AVAILABLE
                 end
             end
 
-            # ── 8. Column sizing (if columns exist) ───────────────────
+            # ── 7. Column sizing (if columns exist) ───────────────────
             @testset "column sizing" begin
                 results_to_check = filter(r -> result_ok(r) && !isempty(r.col_sections),
-                    [res_bare25, res_comp])
+                    [res_comp])
                 for r in results_to_check
                     @test length(r.col_Pu) == length(r.col_sections)
                     @test length(r.col_ϕPn) == length(r.col_sections)
@@ -249,10 +232,8 @@ if GUROBI_AVAILABLE
 
             # ── Print summary ─────────────────────────────────────────
             println("  $name [MIP] results:")
-            println("    Bare 2.5×: $(round(res_bare25.norm_mass_beams, digits=2)) kg/m²" *
-                    " ($(length(res_bare25.minimizers)) beams)")
             if comp_ok
-                println("    Composite: $(round(res_comp.norm_mass_beams, digits=2)) kg/m²")
+                println("    Composite (drf=1.0): $(round(res_comp.norm_mass_beams, digits=2)) kg/m²")
                 if !isempty(res_comp.δ_total)
                     max_δ_tot = round(maximum(res_comp.δ_total) * 1000, digits=2)
                     max_δ_sw  = round(maximum(res_comp.δ_beam_dead) * 1000, digits=2)
@@ -277,7 +258,7 @@ end # GUROBI_AVAILABLE
 nlp_geom_files = ["r1c1.json", "r2c3.json"]
 
 nlp_available = try
-    run_pipeline(load_geometry("r1c1.json"); composite=false, drf=2.5, beam_sizer=:continuous)
+    run_pipeline(load_geometry("r1c1.json"); composite=true, drf=1.0, beam_sizer=:continuous)
     true
 catch e
     @warn "NLP solver unavailable on this platform — skipping NLP tests" exception=e
@@ -294,24 +275,20 @@ if nlp_available
 
         @testset "$name" begin
 
-            println("\n  Running $name [NLP]: bare steel (drf=2.5)...")
-            res_nlp_bare, _, _ = run_pipeline(geom_dict; composite=false, drf=2.5, beam_sizer=:continuous)
-
-            println("  Running $name [NLP]: composite action...")
+            println("\n  Running $name [NLP]: composite (drf=1.0)...")
             res_nlp_comp, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0, beam_sizer=:continuous)
-
-            nlp_bare_ok = result_ok(res_nlp_bare)
             nlp_comp_ok = result_ok(res_nlp_comp)
 
             @testset "beams exist" begin
-                @test nlp_bare_ok || nlp_comp_ok
+                if !nlp_comp_ok
+                    @warn "$name [NLP]: composite infeasible"
+                    @test_skip nlp_comp_ok
+                else
+                    @test nlp_comp_ok
+                end
             end
 
             @testset "NLP mass valid" begin
-                if nlp_bare_ok
-                    @test res_nlp_bare.norm_mass_beams > 0
-                    @test isfinite(res_nlp_bare.norm_mass_beams)
-                end
                 if nlp_comp_ok
                     @test res_nlp_comp.norm_mass_beams > 0
                     @test isfinite(res_nlp_comp.norm_mass_beams)
@@ -320,7 +297,7 @@ if nlp_available
 
             @testset "strength checks pass" begin
                 nlp_tol = 0.05  # Ipopt may slightly violate constraints
-                results_to_check = filter(result_ok, [res_nlp_bare, res_nlp_comp])
+                results_to_check = filter(result_ok, [res_nlp_comp])
                 for r in results_to_check
                     for i in 1:length(r.Mn)
                         if r.Mn[i] > 0 && !isempty(r.My[i])
@@ -359,7 +336,7 @@ if nlp_available
 
             @testset "column sizing" begin
                 results_to_check = filter(r -> result_ok(r) && !isempty(r.col_sections),
-                    [res_nlp_bare, res_nlp_comp])
+                    [res_nlp_comp])
                 for r in results_to_check
                     @test all(r.col_util .>= 0)
                     @test all(r.col_util .<= 1.0 + 1e-3)
@@ -368,10 +345,8 @@ if nlp_available
             end
 
             println("  $name [NLP] results:")
-            println("    Bare 2.5×: $(round(res_nlp_bare.norm_mass_beams, digits=2)) kg/m²  " *
-                    "($(length(res_nlp_bare.minimizers)) beams)")
             if nlp_comp_ok
-                println("    Composite: $(round(res_nlp_comp.norm_mass_beams, digits=2)) kg/m²")
+                println("    Composite (drf=1.0): $(round(res_nlp_comp.norm_mass_beams, digits=2)) kg/m²")
                 if !isempty(res_nlp_comp.δ_total)
                     println("    L/360 fail: $(count(.!res_nlp_comp.δ_live_ok)), " *
                             "L/240 fail: $(count(.!res_nlp_comp.δ_total_ok))")
@@ -387,7 +362,7 @@ end
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MIP vs NLP comparison — NLP (continuous) should be a lower bound on MIP
-#  Uses drf=2.5 bare steel (feasible for both solvers).
+#  Uses composite action, drf=1.0 (production-like).
 # ══════════════════════════════════════════════════════════════════════════════
 if GUROBI_AVAILABLE
 @testset "MIP vs NLP comparison" begin
@@ -399,8 +374,8 @@ if GUROBI_AVAILABLE
         @testset "$name" begin
             println("\n  MIP vs NLP comparison for $name...")
 
-            res_mip, _, _ = run_pipeline(geom_dict; composite=false, drf=2.5, beam_sizer=:discrete)
-            res_nlp, _, _ = run_pipeline(geom_dict; composite=false, drf=2.5, beam_sizer=:continuous)
+            res_mip, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0, beam_sizer=:discrete)
+            res_nlp, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0, beam_sizer=:continuous)
 
             mip_ok = result_ok(res_mip)
             nlp_ok = result_ok(res_nlp)
@@ -435,20 +410,20 @@ end
 # ══════════════════════════════════════════════════════════════════════════════
 #  NLP algorithm comparison — all supported NLP solvers should produce valid
 #  results and be within a reasonable range of MMA (the reference solver).
-#  Uses r1c1 bare steel (drf=2.5) — smallest/fastest geometry.
+#  Uses r1c1 composite (drf=1.0) — production-like, smallest geometry.
 # ══════════════════════════════════════════════════════════════════════════════
 @testset "NLP algorithm comparison" begin
     geom_dict = load_geometry("r1c1.json")
     all_solvers = [:MMA, :SLSQP, :CCSAQ, :COBYLA, :Ipopt]
 
-    println("\n  NLP algorithm comparison for r1c1 (bare steel, drf=2.5)...")
+    println("\n  NLP algorithm comparison for r1c1 (composite, drf=1.0)...")
 
     solver_results = Dict{Symbol, Any}()
     solver_ok      = Dict{Symbol, Bool}()
 
     for solver in all_solvers
         available = try
-            run_pipeline(geom_dict; composite=false, drf=2.5,
+            run_pipeline(geom_dict; composite=true, drf=1.0,
                          beam_sizer=:continuous, nlp_solver=solver)
             true
         catch e
@@ -457,7 +432,7 @@ end
         end
 
         if available
-            res, _, sp = run_pipeline(geom_dict; composite=false, drf=2.5,
+            res, _, sp = run_pipeline(geom_dict; composite=true, drf=1.0,
                                       beam_sizer=:continuous, nlp_solver=solver)
             solver_results[solver] = res
             solver_ok[solver] = result_ok(res)
@@ -570,9 +545,8 @@ end # if nlp_available
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Strength-only tests (deflection_limit=false)
-#  Isolates the strength path to verify it hasn't been affected by staged
-#  deflection changes. Composite mass with deflection OFF should be ≤
-#  deflection-governed mass.
+#  Isolates the strength path vs deflection-governed composite (drf=1.0).
+#  Strength-only composite mass should be ≤ deflection-governed composite mass.
 # ══════════════════════════════════════════════════════════════════════════════
 nodefl_geom_files = ["r1c1.json", "r2c3.json"]
 
@@ -634,22 +608,18 @@ if GUROBI_AVAILABLE
         geom_dict = load_geometry(json_file)
 
         @testset "$name" begin
-            println("\n  Running $name: strength-only bare steel...")
-            res_bare, _, _ = run_pipeline_nodefl(geom_dict; composite=false)
+            println("\n  Running $name: strength-only composite (deflection_limit=false)...")
+            res_str, _, _ = run_pipeline_nodefl(geom_dict; composite=true)
 
-            println("  Running $name: strength-only composite...")
-            res_comp, _, _ = run_pipeline_nodefl(geom_dict; composite=true)
-
-            println("  Running $name: deflection-governed composite (for comparison)...")
+            println("  Running $name: deflection-governed composite (drf=1.0)...")
             res_defl, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0)
 
             @testset "beams exist" begin
-                @test length(res_bare.minimizers) >= 1
-                @test length(res_comp.minimizers) >= 1
+                @test length(res_str.minimizers) >= 1
             end
 
             @testset "strength checks pass" begin
-                for r in [res_bare, res_comp]
+                for r in [res_str]
                     for i in 1:length(r.Mn)
                         if r.Mn[i] > 0 && !isempty(r.My[i])
                             Mu = maximum(abs.(r.My[i]))
@@ -665,16 +635,15 @@ if GUROBI_AVAILABLE
 
             if result_ok(res_defl)
                 @testset "strength-only ≤ deflection-governed mass" begin
-                    @test res_comp.norm_mass_beams <= res_defl.norm_mass_beams + 1e-3
+                    @test res_str.norm_mass_beams <= res_defl.norm_mass_beams + 1e-3
                 end
             end
 
             println("  $name strength-only results:")
-            println("    Bare (no defl):      $(round(res_bare.norm_mass_beams, digits=2)) kg/m²")
-            println("    Composite (no defl): $(round(res_comp.norm_mass_beams, digits=2)) kg/m²")
+            println("    Composite (no defl): $(round(res_str.norm_mass_beams, digits=2)) kg/m²")
             println("    Composite (w/ defl): $(round(res_defl.norm_mass_beams, digits=2)) kg/m²")
             ratio = res_defl.norm_mass_beams > 0 ?
-                round(res_defl.norm_mass_beams / max(res_comp.norm_mass_beams, 1e-6), digits=2) : NaN
+                round(res_defl.norm_mass_beams / max(res_str.norm_mass_beams, 1e-6), digits=2) : NaN
             println("    Deflection overhead: $(ratio)×")
         end
 

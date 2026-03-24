@@ -4,10 +4,13 @@ Master test runner for SlabDesignFactors.
 Usage (from project root):
     julia --project=. SlabDesignFactors/test/run.jl
 
-Two-tier test suite:
-  1. Unit tests   — fast, no geometry loading
-  2. Integration  — full pipeline on real topology JSONs (slower)
+Test tiers:
+  1. Unit tests (`test_*.jl` in the unit block) — fast
+  2. Integration — MIP/NLP sizing on topology JSONs (`test_integration.jl`)
+  3. Slurm parity — `test_slurm_pipeline.jl` (`run_shard` + merge); uses `secrets/gurobi.lic` when present
 """
+
+include(joinpath(@__DIR__, "_license_env.jl"))
 
 using Test
 
@@ -19,5 +22,6 @@ using Test
     end
     @testset "Integration tests" begin
         include("test_integration.jl")
+        include("test_slurm_pipeline.jl")
     end
 end

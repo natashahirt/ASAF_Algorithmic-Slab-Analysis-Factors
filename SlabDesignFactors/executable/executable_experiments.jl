@@ -78,8 +78,7 @@ end
 Read and parse the geometry JSON payload format used in this repository.
 """
 function read_geometry_from_json(path::String)
-    json_string = replace(read(path, String), "\\n" => "")
-    return JSON.parse(JSON.parse(json_string, dicttype=Dict))
+    return SlabDesignFactors.geometry_dict_from_json_path(path)
 end
 
 """
@@ -258,7 +257,7 @@ function run_max_depths(results_path::String; json_path::String=DEFAULT_TOPOLOGY
         println("[max_depths] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) $(cfg.slab_type) $(cfg.slab_sizer) $(cfg.max_depth)in")
         try
             geometry_dict = read_geometry_from_json(cfg.path)
-            geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+            geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
 
             slab_params = SlabDesignFactors.SlabAnalysisParams(
                 geometry,
@@ -355,7 +354,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
 
         try
             geometry_dict = read_geometry_from_json(cfg.path)
-            geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+            geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
             slab_params = SlabDesignFactors.SlabAnalysisParams(
                 geometry,
                 slab_name=cfg.name,
@@ -492,7 +491,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
     # Helper closure shared by both substudies.
     function run_constrained_cfg(cfg::NamedTuple, results_name::String, unique_sections_value::Int)
         geometry_dict = read_geometry_from_json(cfg.path)
-        geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+        geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
 
         slab_params = SlabDesignFactors.SlabAnalysisParams(
             geometry,
@@ -638,7 +637,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
 
         try
             geometry_dict = read_geometry_from_json(cfg.path)
-            geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+            geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
 
             slab_params = SlabDesignFactors.SlabAnalysisParams(
                 geometry,
@@ -894,7 +893,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
 
         try
             geometry_dict = read_geometry_from_json(cfg.path)
-            geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+            geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
 
             slab_params = SlabDesignFactors.SlabAnalysisParams(
                 geometry,

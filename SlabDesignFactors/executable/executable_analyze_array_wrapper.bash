@@ -41,7 +41,12 @@ run_merge_if_needed() {
         return 0
     fi
     echo "$(date) - Running merge → ${MERGED_DIR}"
-    julia "$MERGE_SCRIPT" "$RESULTS_ROOT" "$RUN_NAME" "$MERGED_DIR"
+    if [[ "${MERGE_SCRIPT}" = /* ]]; then
+        _merge_jl="${MERGE_SCRIPT}"
+    else
+        _merge_jl="${_REPO_ROOT}/${MERGE_SCRIPT}"
+    fi
+    julia --project="${_REPO_ROOT}" "${_merge_jl}" "$RESULTS_ROOT" "$RUN_NAME" "$MERGED_DIR"
     touch "$merge_done_file"
     echo "$(date) - Merge complete; wrote ${merge_done_file}"
 }

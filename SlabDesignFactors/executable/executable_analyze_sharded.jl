@@ -148,15 +148,14 @@ function write_progress(progress_file::String, payload::Dict{String, Any})
 end
 
 """
-    run_one_config(cfg) -> Union{Vector{SlabOptimResults}, Nothing}
+    run_one_config(cfg) -> Union{Vector{SlabDesignFactors.SlabOptimResults}, Nothing}
 
 Run a single slab configuration. Returns `nothing` on failure.
 """
-function run_one_config(cfg)::Union{Vector{SlabOptimResults}, Nothing}
+function run_one_config(cfg)::Union{Vector{SlabDesignFactors.SlabOptimResults}, Nothing}
     try
-        json_string = replace(read(cfg.path, String), "\\n" => "")
-        geometry_dict = JSON.parse(JSON.parse(json_string, dicttype=Dict))
-        geometry = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
+        geometry_dict = SlabDesignFactors.geometry_dict_from_json_path(cfg.path)
+        geometry, _ = SlabDesignFactors.generate_from_json(geometry_dict; plot=false, drawn=false)
 
         slab_params = SlabDesignFactors.SlabAnalysisParams(
             geometry,
@@ -331,4 +330,7 @@ function main()
     run_shard(results_root, run_name, completion_dir, params_file)
 end
 
-main()
+# Run CLI only when this file is the Julia entry script (not when `include`d from tests).
+if !isempty(PROGRAM_FILE) && abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main()
+end
