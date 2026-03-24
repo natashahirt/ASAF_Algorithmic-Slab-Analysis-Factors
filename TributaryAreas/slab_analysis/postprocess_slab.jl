@@ -390,6 +390,42 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
     _global_δ_ok  = _max_bay_span <= 0 || _max_δ_total <= _max_bay_span / 180.0
 
     _nlp_solver_str = params.beam_sizer == :discrete ? "MIP" : String(params.nlp_solver)
+    _strength_ok = _max_util_M <= 1.0 + 1e-3 && _max_util_V <= 1.0 + 1e-3
+    _column_ok = isempty(col_util) || _max_col_util <= 1.0 + 1e-3
+    _serviceability_ok = !params.deflection_limit || (
+        _n_L360_fail == 0 &&
+        _n_L240_fail == 0 &&
+        _global_δ_ok &&
+        params.staged_n_violations == 0
+    )
+    _result_ok = self.area > 0 &&
+        !isempty(minimizers) &&
+        _strength_ok &&
+        _column_ok &&
+        _serviceability_ok
+
+    _solver_status = _result_ok ? "OK" :
+        (isempty(minimizers) ? "NO_SOLUTION" :
+        (!_strength_ok ? "STRENGTH_FAIL" :
+        (!_serviceability_ok ? "SERVICEABILITY_FAIL" :
+        (!_column_ok ? "COLUMN_FAIL" : "WARN"))))
+
+    _diag_flags = String[]
+    !_result_ok && push!(_diag_flags, "result_not_ok")
+    !_strength_ok && push!(_diag_flags, "strength_fail")
+    !_column_ok && push!(_diag_flags, "column_fail")
+    !_serviceability_ok && push!(_diag_flags, "serviceability_fail")
+    (_n_L360_fail > 0) && push!(_diag_flags, "l360_fail")
+    (_n_L240_fail > 0) && push!(_diag_flags, "l240_fail")
+    !_global_δ_ok && push!(_diag_flags, "global_deflection_sanity_fail")
+    !params.staged_converged && push!(_diag_flags, "staged_not_converged")
+    (params.staged_n_violations > 0) && push!(_diag_flags, "staged_violations_remaining")
+    isempty(minimizers) && push!(_diag_flags, "no_minimizers")
+    (self.area <= 0) && push!(_diag_flags, "no_slab_area")
+    _diag_flags = unique(_diag_flags)
+    _diagnostic_flags = isempty(_diag_flags) ? "none" : join(_diag_flags, ";")
+    _diagnostic_messages = isempty(_diag_flags) ? "No diagnostics triggered." :
+        "Triggered flags: " * join(_diag_flags, ", ")
 
     results = SlabOptimResults(
         slab_name              = self.slab_name,
@@ -457,6 +493,14 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
         composite_action       = params.composite_action,
         staged_converged       = params.staged_converged,
         staged_n_violations    = params.staged_n_violations,
+        geometry_file          = self.slab_name,
+        result_ok              = _result_ok,
+        strength_ok            = _strength_ok,
+        serviceability_ok      = _serviceability_ok,
+        column_ok              = _column_ok,
+        solver_status          = _solver_status,
+        diagnostic_flags       = _diagnostic_flags,
+        diagnostic_messages    = _diagnostic_messages,
     )
 
     return results
