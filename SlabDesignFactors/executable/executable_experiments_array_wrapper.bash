@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_REPO_ROOT="$(cd "${_SCRIPT_DIR}/../.." && pwd)"
+
 # Resubmission wrapper for experiments array runs.
 # Parallelization is by study (one array task per study).
 
@@ -12,10 +15,12 @@ STUDY_LIST_CSV="${STUDY_LIST_CSV:-max_depths,strip_resolution,constrained_invent
 EXECUTABLE_PATH="${EXECUTABLE_PATH:-SlabDesignFactors/executable/executable_experiments.jl}"
 MAX_RESUBMISSIONS="${MAX_RESUBMISSIONS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="${LOG_FILE:-logs/experiments_array_wrapper_${TIMESTAMP}.log}"
+JOB_LOG_ID="${JOB_LOG_ID:-experiments_array_$(date +%Y%m%d_%H%M%S)_$$}"
+OUT_JOB_DIR="${_REPO_ROOT}/outputs/${JOB_LOG_ID}"
+LOG_JOB_DIR="${_REPO_ROOT}/logs/${JOB_LOG_ID}"
+mkdir -p "$OUT_JOB_DIR" "$LOG_JOB_DIR"
+LOG_FILE="${LOG_FILE:-${LOG_JOB_DIR}/wrapper.log}"
 
-mkdir -p logs
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
 
@@ -55,6 +60,8 @@ submit_missing_studies() {
     local missing_indices="$1"
     echo "$(date) - Submitting study indices: ${missing_indices}"
     job_id=$(sbatch --parsable --array="${missing_indices}" \
+        --output="${OUT_JOB_DIR}/slurm_%A_%a.out" \
+        --error="${OUT_JOB_DIR}/slurm_%A_%a.err" \
         "$SLURM_SCRIPT" \
         "$RESULTS_PATH" \
         "$COMPLETION_DIR" \
@@ -74,6 +81,10 @@ wait_for_job_completion() {
 
 mkdir -p "$COMPLETION_DIR"
 echo "$(date) - Starting experiments array wrapper"
+echo "JOB_LOG_ID=${JOB_LOG_ID}"
+echo "OUT_JOB_DIR=${OUT_JOB_DIR}"
+echo "LOG_JOB_DIR=${LOG_JOB_DIR}"
+echo "LOG_FILE=${LOG_FILE}"
 echo "SLURM_SCRIPT=${SLURM_SCRIPT}"
 echo "RESULTS_PATH=${RESULTS_PATH}"
 echo "COMPLETION_DIR=${COMPLETION_DIR}"

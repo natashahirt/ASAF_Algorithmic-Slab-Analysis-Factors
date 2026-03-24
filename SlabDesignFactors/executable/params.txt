@@ -1,3 +1,5 @@
-/home/nhirt/2024_Slab-Design-Factors/Geometries/grid/ grid
-/home/nhirt/2024_Slab-Design-Factors/Geometries/nova/ nova
-/home/nhirt/2024_Slab-Design-Factors/Geometries/topology/ topology
+# Geometry directories (first column) are relative to the repository root unless absolute.
+# Format: <dir> <results_name>
+Geometries/grid/ grid
+Geometries/nova/ nova
+Geometries/topology/ topology

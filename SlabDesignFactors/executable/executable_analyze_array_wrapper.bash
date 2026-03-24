@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_REPO_ROOT="$(cd "${_SCRIPT_DIR}/../.." && pwd)"
+
 # Resubmission wrapper for the sharded full-sweep runner.
 # It submits only incomplete shards, waits for completion, and repeats until
 # all shard completion markers are present.
@@ -10,17 +13,20 @@ SLURM_SCRIPT="${SLURM_SCRIPT:-SlabDesignFactors/executable/executable_analyze_ar
 RESULTS_ROOT="${RESULTS_ROOT:-SlabDesignFactors/results/remote_results_full_sweep}"
 RUN_NAME="${RUN_NAME:-full_sweep}"
 COMPLETION_DIR="${COMPLETION_DIR:-${RESULTS_ROOT}/completion}"
-PARAMS_FILE="${PARAMS_FILE:-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/executable/params.txt}"
+PARAMS_FILE="${PARAMS_FILE:-${_REPO_ROOT}/SlabDesignFactors/executable/params.txt}"
 EXECUTABLE_PATH="${EXECUTABLE_PATH:-SlabDesignFactors/executable/executable_analyze_sharded.jl}"
 TOTAL_SHARDS="${TOTAL_SHARDS:-16}"
 MAX_RESUBMISSIONS="${MAX_RESUBMISSIONS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 MERGE_SCRIPT="${MERGE_SCRIPT:-SlabDesignFactors/executable/executable_merge_shards.jl}"
 MERGED_DIR="${MERGED_DIR:-${RESULTS_ROOT}/merged}"
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="${LOG_FILE:-logs/analyze_array_wrapper_${TIMESTAMP}.log}"
+# One folder per wrapper invocation (override with JOB_LOG_ID).
+JOB_LOG_ID="${JOB_LOG_ID:-analyze_array_$(date +%Y%m%d_%H%M%S)_$$}"
+OUT_JOB_DIR="${_REPO_ROOT}/outputs/${JOB_LOG_ID}"
+LOG_JOB_DIR="${_REPO_ROOT}/logs/${JOB_LOG_ID}"
+mkdir -p "$OUT_JOB_DIR" "$LOG_JOB_DIR"
+LOG_FILE="${LOG_FILE:-${LOG_JOB_DIR}/wrapper.log}"
 
-mkdir -p logs
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
 
@@ -61,6 +67,8 @@ submit_missing_shards() {
     local missing_list="$1"
     echo "$(date) - Submitting missing shard list: ${missing_list}"
     job_id=$(sbatch --parsable --array="${missing_list}" \
+        --output="${OUT_JOB_DIR}/slurm_%A_%a.out" \
+        --error="${OUT_JOB_DIR}/slurm_%A_%a.err" \
         "$SLURM_SCRIPT" \
         "$RESULTS_ROOT" \
         "$RUN_NAME" \
@@ -80,6 +88,10 @@ wait_for_job_completion() {
 }
 
 echo "$(date) - Starting array wrapper."
+echo "JOB_LOG_ID=${JOB_LOG_ID}"
+echo "OUT_JOB_DIR=${OUT_JOB_DIR}"
+echo "LOG_JOB_DIR=${LOG_JOB_DIR}"
+echo "LOG_FILE=${LOG_FILE}"
 echo "SLURM_SCRIPT=${SLURM_SCRIPT}"
 echo "RESULTS_ROOT=${RESULTS_ROOT}"
 echo "RUN_NAME=${RUN_NAME}"

@@ -5,17 +5,23 @@
 #SBATCH --array=1-6
 #SBATCH -t 12:00:00
 #SBATCH -p mit_normal
-#SBATCH -o outputs/experiments_array_%A_%a.out
-#SBATCH -e outputs/experiments_array_%A_%a.err
+# Direct sbatch: flat names. Wrappers override with outputs/<JOB_LOG_ID>/...
+#SBATCH -o outputs/slurm_experiments_%A_%a.out
+#SBATCH -e outputs/slurm_experiments_%A_%a.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=nhirt@mit.edu
 
 set -euo pipefail
 
+module load community-modules
 module load julia
 module load gurobi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  REPO_ROOT="${SLURM_SUBMIT_DIR}"
+else
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 [[ -f "${REPO_ROOT}/env_gurobi.sh" ]] && source "${REPO_ROOT}/env_gurobi.sh"
 
 mkdir -p outputs

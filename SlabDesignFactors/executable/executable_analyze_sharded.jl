@@ -10,11 +10,15 @@ using .SlabDesignFactors
 """
     parse_params_file(params_file::String) -> Vector{Tuple{String, String}}
 
-Read executable parameter lines of the form:
-`<json_path> <results_name>`.
-Blank lines and `#` comments are ignored.
+Read lines `<geometry_dir> <results_name>`. Blank lines and `#` comments are ignored.
+
+If `geometry_dir` is not an absolute path, it is resolved relative to the **repository root**:
+`normpath(joinpath(dirname(abspath(params_file)), "..", ".."))` when `params_file` is under
+`SlabDesignFactors/executable/`.
 """
 function parse_params_file(params_file::String)::Vector{Tuple{String, String}}
+    params_abs = abspath(params_file)
+    repo_root = normpath(joinpath(dirname(params_abs), "..", ".."))
     entries = Tuple{String, String}[]
     for raw_line in readlines(params_file)
         line = strip(raw_line)
@@ -26,7 +30,9 @@ function parse_params_file(params_file::String)::Vector{Tuple{String, String}}
             @warn "Skipping malformed params line" line=line
             continue
         end
-        push!(entries, (parts[1], parts[2]))
+        raw_path = String(parts[1])
+        geom_dir = isabspath(raw_path) ? normpath(raw_path) : normpath(joinpath(repo_root, raw_path))
+        push!(entries, (geom_dir, String(parts[2])))
     end
     return entries
 end
@@ -190,6 +196,9 @@ end
 
 Run a deterministic shard of the full sweep, resumable from per-shard CSVs.
 Shard metadata is read from Slurm environment variables.
+
+Outputs for this shard go under `results_root/run_name/shards/shard_<NNN>/` (e.g. `grid.csv`, `nova.csv`).
+Progress JSON stays in `results_root/run_name/progress/`.
 """
 function run_shard(
     results_root::String,
@@ -205,9 +214,10 @@ function run_shard(
     println("Shard $(shard_id)/$(shard_count) starting with $(Threads.nthreads()) Julia threads and 1 BLAS thread.")
 
     results_dir = joinpath(results_root, run_name, "shards")
+    shard_dir = joinpath(results_dir, "shard_$(shard_suffix)")
     progress_dir = joinpath(results_root, run_name, "progress")
     completion_shards_dir = joinpath(completion_dir, run_name)
-    mkpath(results_dir)
+    mkpath(shard_dir)
     mkpath(progress_dir)
     mkpath(completion_shards_dir)
 
@@ -218,7 +228,7 @@ function run_shard(
     # Resume state is isolated per {results_name, shard}.
     done_by_result = Dict{String, Set{NTuple{6, Any}}}()
     for (_, results_name) in params_entries
-        shard_results_file = joinpath(results_dir, "$(results_name)_shard_$(shard_suffix).csv")
+        shard_results_file = joinpath(shard_dir, "$(results_name).csv")
         done_by_result[results_name] = done_set_for_file(shard_results_file)
     end
 
@@ -259,8 +269,7 @@ function run_shard(
         end
 
         lock(append_lock) do
-            shard_filename = "$(cfg.results_name)_shard_$(shard_suffix)"
-            SlabDesignFactors.append_results_to_csv(results_dir * "/", shard_filename, iteration_result)
+            SlabDesignFactors.append_results_to_csv(shard_dir * "/", cfg.results_name, iteration_result)
             key = config_key(cfg.name, cfg.slab_sizer, cfg.max_depth, cfg.slab_type, cfg.vector_1d)
             push!(done_by_result[cfg.results_name], key)
         end
@@ -317,7 +326,7 @@ function main()
     results_root = args[1]
     run_name = args[2]
     completion_dir = args[3]
-    params_file = length(args) == 4 ? args[4] : "/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/executable/params.txt"
+    params_file = length(args) == 4 ? args[4] : joinpath(@__DIR__, "params.txt")
 
     run_shard(results_root, run_name, completion_dir, params_file)
 end

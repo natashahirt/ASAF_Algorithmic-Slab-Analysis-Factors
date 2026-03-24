@@ -22,6 +22,7 @@ SlabDesignFactors/plot_figures/figures_raw*
 SlabDesignFactors/plot_figures/plotting_old
 Documentation/
 outputs/
+logs/
 Manifest.toml
 Project.toml
 secrets/

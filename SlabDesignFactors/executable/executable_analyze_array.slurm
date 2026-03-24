@@ -5,17 +5,23 @@
 #SBATCH --array=1-16
 #SBATCH -t 12:00:00
 #SBATCH -p mit_normal
-#SBATCH -o outputs/analyze_array_%A_%a.out
-#SBATCH -e outputs/analyze_array_%A_%a.err
+# Direct sbatch: flat names under outputs/ (no extra subdir). Wrappers override with outputs/<JOB_LOG_ID>/...
+#SBATCH -o outputs/slurm_analyze_%A_%a.out
+#SBATCH -e outputs/slurm_analyze_%A_%a.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=nhirt@mit.edu
 
 set -euo pipefail
 
+module load community-modules
 module load julia
 module load gurobi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  REPO_ROOT="${SLURM_SUBMIT_DIR}"
+else
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 [[ -f "${REPO_ROOT}/env_gurobi.sh" ]] && source "${REPO_ROOT}/env_gurobi.sh"
 
 mkdir -p outputs
@@ -23,7 +29,7 @@ mkdir -p outputs
 RESULTS_ROOT="${1:-SlabDesignFactors/results/remote_results_full_sweep}"
 RUN_NAME="${2:-full_sweep}"
 COMPLETION_DIR="${3:-${RESULTS_ROOT}/completion}"
-PARAMS_FILE="${4:-/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/executable/params.txt}"
+PARAMS_FILE="${4:-${REPO_ROOT}/SlabDesignFactors/executable/params.txt}"
 EXECUTABLE_PATH="${5:-SlabDesignFactors/executable/executable_analyze_sharded.jl}"
 
 if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then

@@ -27,8 +27,9 @@ using Statistics
 using Random
 using .SlabDesignFactors
 
-const DEFAULT_TOPOLOGY_JSON_PATH = "/home/nhirt/2024_Slab-Design-Factors/SlabDesignFactors/jsons/topology/"
-const DEFAULT_VALIDATION_JSON_PATH = "/home/nhirt/2024_Slab-Design-Factors/Geometries/validation/"
+const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+const DEFAULT_TOPOLOGY_JSON_PATH = joinpath(_REPO_ROOT, "SlabDesignFactors", "jsons", "topology")
+const DEFAULT_VALIDATION_JSON_PATH = joinpath(_REPO_ROOT, "Geometries", "validation")
 const DEFAULT_STUDIES = Set(["max_depths", "strip_resolution", "constrained_inventory", "nlp_solver_comparison", "material_scenario_mc", "validation_mip"])
 const NLP_SOLVER_LIST = [:MIP, :MMA, :SLSQP, :CCSAQ, :COBYLA, :Ipopt]
 
