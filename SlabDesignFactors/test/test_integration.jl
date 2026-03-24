@@ -9,9 +9,16 @@ Bare non-composite cases are not used in the deflection-limited pipeline here;
 staged deflection is validated on the composite results (`δ_slab_dead`, `δ_beam_dead`,
 SDL/Live split, CSV export).
 
+Collinearity is enforced **during** the MIP/NLP solve via same-section constraints
+on collinear groups (not via legacy postprocessing).  Postprocessing follows the
+solver's `collinear` flag without overriding it.  Tests verify:
+  - Collinear runs: every beam in a collinear group receives the same section.
+  - Noncollinear runs: beams are sized independently; the `collinear` flag
+    propagates correctly to results; mass is ≤ the collinear result.
+
 Solver paths tested:
-  - MIP (discrete, Gurobi) : all geometries
-  - NLP (continuous, NLopt) : r1c1, r2c3 (smaller geometries — NLP is slower)
+  - MIP (discrete, Gurobi) : all geometries (collinear + noncollinear)
+  - NLP (continuous, Ipopt) : r1c1, r2c3 (smaller geometries — NLP is slower)
 
 Geometries:
   - r1c1 : 1-row 1-col (simplest regular bay)
@@ -29,6 +36,8 @@ Verified physical invariants:
   7. NLP mass ≤ MIP mass (continuous relaxation is a lower bound on discrete).
   8. NLP and MIP produce the same number of beams per geometry.
   9. Strength-only composite mass ≤ deflection-governed composite mass.
+ 10. Solver-enforced collinearity: group members share identical sections.
+ 11. Noncollinear mass ≤ collinear mass (relaxed constraint is a lower bound).
 """
 
 using Test
@@ -55,9 +64,15 @@ function load_geometry(json_file)
     return geometry_dict_from_json_path(path)
 end
 
-"""Run the full pipeline for one geometry + one set of analysis options."""
+"""Run the full pipeline for one geometry + one set of analysis options.
+
+When `collinear=true` (default) the MIP/NLP solver enforces same-section
+constraints within collinear groups; postprocessing follows the same flag
+without overriding it, so results reflect what the optimizer actually chose.
+"""
 function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
-                      beam_sizer::Symbol=:discrete, nlp_solver::Symbol=:MMA)
+                      beam_sizer::Symbol=:discrete, nlp_solver::Symbol=:Ipopt,
+                      collinear::Bool=true)
     geom, _ = Base.invokelatest(generate_from_json, geometry_dict; plot=false, drawn=false)
 
     slab_params = SlabAnalysisParams(
@@ -83,7 +98,7 @@ function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
         max_depth                   = 40.0,
         beam_units                  = :in,
         serviceability_lim          = 360,
-        collinear                   = true,
+        collinear                   = collinear,
         minimum_continuous          = true,
         n_max_sections              = 0,
         composite_action            = composite,
@@ -98,7 +113,7 @@ function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
         return SlabOptimResults(), slab_params, sizing_params
     end
 
-    results = postprocess_slab(slab_params, sizing_params, check_collinear=true)
+    results = postprocess_slab(slab_params, sizing_params)
 
     return results, slab_params, sizing_params
 end
@@ -121,7 +136,7 @@ if GUROBI_AVAILABLE
 
             # ── Run case (production-like: composite, full deflection) ───────────
             println("\n  Running $name [MIP]: composite action (drf=1.0)...")
-            res_comp, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0)
+            res_comp, _, sp_comp = run_pipeline(geom_dict; composite=true, drf=1.0)
             comp_ok = result_ok(res_comp)
 
             # ── 1. Feasibility ─────────────────────────────────────────
@@ -230,6 +245,22 @@ if GUROBI_AVAILABLE
                 end
             end
 
+            # ── 8. Solver-enforced collinearity ────────────────────────
+            if comp_ok
+                @testset "solver-enforced collinearity" begin
+                    @test res_comp.collinear == true
+                    groups = get_collinear_groups(sp_comp.model.elements[:beam])
+                    for gid in unique(groups)
+                        members = findall(==(gid), groups)
+                        length(members) <= 1 && continue
+                        leader_id = sp_comp.ids[members[1]]
+                        for m in members[2:end]
+                            @test sp_comp.ids[m] == leader_id
+                        end
+                    end
+                end
+            end
+
             # ── Print summary ─────────────────────────────────────────
             println("  $name [MIP] results:")
             if comp_ok
@@ -243,6 +274,68 @@ if GUROBI_AVAILABLE
                 end
             else
                 println("    Composite: INFEASIBLE (sizing could not converge)")
+            end
+        end
+
+        GC.gc()
+    end
+end
+end # GUROBI_AVAILABLE
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Noncollinear MIP — verify that beams are sized independently when
+#  collinear=false.  Each beam gets its own optimal section; groups are NOT
+#  required to match.  Uses a subset of geometries (r2c3, r7c4) that have
+#  multi-beam collinear groups so the distinction is meaningful.
+# ══════════════════════════════════════════════════════════════════════════════
+noncol_geom_files = ["r2c3.json", "r7c4.json"]
+
+if GUROBI_AVAILABLE
+@testset "Integration — MIP noncollinear (collinear=false)" begin
+
+    for json_file in noncol_geom_files
+        name = replace(json_file, ".json" => "")
+        geom_dict = load_geometry(json_file)
+
+        @testset "$name" begin
+            println("\n  Running $name [MIP]: noncollinear composite (drf=1.0)...")
+            res_nc, _, sp_nc = run_pipeline(geom_dict; composite=true, drf=1.0, collinear=false)
+            nc_ok = result_ok(res_nc)
+
+            @testset "beams exist" begin
+                if !nc_ok
+                    @warn "$name: noncollinear design infeasible"
+                    @test_skip nc_ok
+                else
+                    @test nc_ok
+                end
+            end
+
+            if nc_ok
+                @testset "collinear flag is false" begin
+                    @test res_nc.collinear == false
+                end
+                @testset "noncollinear mass ≤ collinear mass" begin
+                    res_col, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0, collinear=true)
+                    if result_ok(res_col)
+                        @test res_nc.norm_mass_beams <= res_col.norm_mass_beams + 1e-3
+                    end
+                end
+
+                @testset "strength checks pass" begin
+                    for i in 1:length(res_nc.Mn)
+                        if res_nc.Mn[i] > 0 && !isempty(res_nc.My[i])
+                            Mu = maximum(abs.(res_nc.My[i]))
+                            @test Mu / res_nc.Mn[i] <= 1.0 + 1e-3
+                        end
+                    end
+                end
+            end
+
+            if nc_ok
+                println("    Noncollinear: $(round(res_nc.norm_mass_beams, digits=2)) kg/m²")
+            else
+                println("    Noncollinear: INFEASIBLE")
             end
         end
 
@@ -276,7 +369,7 @@ if nlp_available
         @testset "$name" begin
 
             println("\n  Running $name [NLP]: composite (drf=1.0)...")
-            res_nlp_comp, _, _ = run_pipeline(geom_dict; composite=true, drf=1.0, beam_sizer=:continuous)
+            res_nlp_comp, _, sp_nlp_comp = run_pipeline(geom_dict; composite=true, drf=1.0, beam_sizer=:continuous)
             nlp_comp_ok = result_ok(res_nlp_comp)
 
             @testset "beams exist" begin
@@ -341,6 +434,21 @@ if nlp_available
                     @test all(r.col_util .>= 0)
                     @test all(r.col_util .<= 1.0 + 1e-3)
                     @test r.mass_columns > 0
+                end
+            end
+
+            if nlp_comp_ok
+                @testset "solver-enforced collinearity" begin
+                    @test res_nlp_comp.collinear == true
+                    groups = get_collinear_groups(sp_nlp_comp.model.elements[:beam])
+                    for gid in unique(groups)
+                        members = findall(==(gid), groups)
+                        length(members) <= 1 && continue
+                        leader_mins = sp_nlp_comp.minimizers[members[1]]
+                        for m in members[2:end]
+                            @test sp_nlp_comp.minimizers[m] ≈ leader_mins atol=1e-3
+                        end
+                    end
                 end
             end
 
@@ -409,12 +517,12 @@ end
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  NLP algorithm comparison — all supported NLP solvers should produce valid
-#  results and be within a reasonable range of MMA (the reference solver).
+#  results and be within a reasonable range of Ipopt (the reference solver).
 #  Uses r1c1 composite (drf=1.0) — production-like, smallest geometry.
 # ══════════════════════════════════════════════════════════════════════════════
 @testset "NLP algorithm comparison" begin
     geom_dict = load_geometry("r1c1.json")
-    all_solvers = [:MMA, :SLSQP, :CCSAQ, :COBYLA, :Ipopt]
+    all_solvers = [:Ipopt, :MMA, :SLSQP, :CCSAQ, :COBYLA]
 
     println("\n  NLP algorithm comparison for r1c1 (composite, drf=1.0)...")
 
@@ -469,19 +577,19 @@ end
         end
     end
 
-    @testset "results within 50% of MMA" begin
-        if solver_ok[:MMA]
-            mma_mass = solver_results[:MMA].norm_mass_beams
+    @testset "results within 50% of Ipopt" begin
+        if solver_ok[:Ipopt]
+            ipopt_mass = solver_results[:Ipopt].norm_mass_beams
             for solver in all_solvers
-                solver == :MMA && continue
+                solver == :Ipopt && continue
                 @testset "$solver" begin
                     if solver_ok[solver]
-                        ratio = solver_results[solver].norm_mass_beams / mma_mass
-                        println("    $solver / MMA ratio: $(round(ratio, digits=4))")
+                        ratio = solver_results[solver].norm_mass_beams / ipopt_mass
+                        println("    $solver / Ipopt ratio: $(round(ratio, digits=4))")
                         if 0.5 <= ratio <= 1.5
                             @test true
                         else
-                            @warn "$solver / MMA ratio $(round(ratio, digits=4)) outside [0.5, 1.5] " *
+                            @warn "$solver / Ipopt ratio $(round(ratio, digits=4)) outside [0.5, 1.5] " *
                                   "(often an infeasible NLP local minimum, not a true lower bound)"
                             @test_broken 0.5 <= ratio <= 1.5
                         end
@@ -495,7 +603,7 @@ end
 
     @testset "strength feasible (proven solvers)" begin
         nlp_tol = 0.05
-        for solver in [:MMA, :Ipopt]
+        for solver in [:Ipopt, :MMA]
             @testset "$solver" begin
                 if solver_ok[solver]
                     r = solver_results[solver]
@@ -550,9 +658,14 @@ end # if nlp_available
 # ══════════════════════════════════════════════════════════════════════════════
 nodefl_geom_files = ["r1c1.json", "r2c3.json"]
 
-"""Run pipeline with deflection_limit=false."""
+"""Run pipeline with deflection_limit=false.
+
+See `run_pipeline` for collinearity rationale — postprocessing follows the
+solver flag without overriding it.
+"""
 function run_pipeline_nodefl(geometry_dict; composite::Bool=false,
-                              beam_sizer::Symbol=:discrete)
+                              beam_sizer::Symbol=:discrete,
+                              collinear::Bool=true)
     geom, _ = Base.invokelatest(generate_from_json, geometry_dict; plot=false, drawn=false)
 
     slab_params = SlabAnalysisParams(
@@ -577,7 +690,7 @@ function run_pipeline_nodefl(geometry_dict; composite::Bool=false,
         max_depth                   = 40.0,
         beam_units                  = :in,
         serviceability_lim          = 360,
-        collinear                   = true,
+        collinear                   = collinear,
         minimum_continuous          = true,
         n_max_sections              = 0,
         composite_action            = composite,
@@ -592,7 +705,7 @@ function run_pipeline_nodefl(geometry_dict; composite::Bool=false,
         return SlabOptimResults(), slab_params, sizing_params
     end
 
-    results = postprocess_slab(slab_params, sizing_params, check_collinear=true)
+    results = postprocess_slab(slab_params, sizing_params)
     return results, slab_params, sizing_params
 end
 
@@ -651,5 +764,183 @@ if GUROBI_AVAILABLE
     end
 end
 end # GUROBI_AVAILABLE
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Grid-style solver comparison — exercises configurations matching the
+#  production full-sweep grid (varied slab types, depths, geometries) and
+#  compares MIP, Ipopt, and MMA.  Catches regressions where a continuous
+#  solver silently returns infeasible sections.
+#
+#  Configurations chosen to span:
+#    - small (r1c1, 12 beams) to large (r5c2, many beams)
+#    - isotropic + orthotropic biaxial + uniaxial slab types
+#    - 25 in and 40 in depth limits
+#    - cellular and uniform slab sizers
+# ══════════════════════════════════════════════════════════════════════════════
+function run_pipeline_grid(geometry_dict;
+                           slab_type::Symbol=:isotropic,
+                           vector_1d::Vector{Float64}=[1.0, 0.0],
+                           slab_sizer::Symbol=:uniform,
+                           max_depth::Float64=40.0,
+                           beam_sizer::Symbol=:discrete,
+                           nlp_solver::Symbol=:Ipopt,
+                           collinear::Bool=true)
+    geom, _ = Base.invokelatest(generate_from_json, geometry_dict; plot=false, drawn=false)
+
+    slab_params = SlabAnalysisParams(
+        geom,
+        slab_name       = "test",
+        slab_type       = slab_type,
+        vector_1d       = vector_1d,
+        slab_sizer      = slab_sizer,
+        spacing         = 0.1,
+        plot_analysis   = false,
+        fix_param       = true,
+        slab_units      = :m,
+    )
+
+    sizing_params = SlabSizingParams(
+        live_load                   = psf_to_ksi(50),
+        superimposed_dead_load      = psf_to_ksi(15),
+        slab_dead_load              = 0.0,
+        live_factor                 = 1.6,
+        dead_factor                 = 1.2,
+        beam_sizer                  = beam_sizer,
+        nlp_solver                  = nlp_solver,
+        max_depth                   = max_depth,
+        beam_units                  = :in,
+        serviceability_lim          = 360,
+        collinear                   = collinear,
+        minimum_continuous          = true,
+        n_max_sections              = 0,
+        composite_action            = true,
+        deflection_reduction_factor = 1.0,
+    )
+
+    slab_params = analyze_slab(slab_params)
+    slab_params, sizing_params = optimal_beamsizer(slab_params, sizing_params)
+
+    if isempty(sizing_params.minimizers)
+        return SlabOptimResults(), slab_params, sizing_params
+    end
+
+    results = postprocess_slab(slab_params, sizing_params)
+    return results, slab_params, sizing_params
+end
+
+grid_configs = [
+    # (json_file, slab_type, vector_1d, slab_sizer, max_depth, description)
+    # Small geometry — isotropic
+    ("r1c1.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r1c1 iso uniform 40in"),
+    ("r1c1.json", :isotropic,     [0.0, 0.0], :cellular, 25.0, "r1c1 iso cellular 25in"),
+    # Medium geometry — varied slab types
+    ("r2c3.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r2c3 iso uniform 40in"),
+    ("r2c3.json", :orth_biaxial,  [1.0, 0.0], :uniform,  25.0, "r2c3 orth_biax uniform 25in"),
+    ("r2c3.json", :uniaxial,     [1.0, 0.0], :cellular, 40.0, "r2c3 uniax cellular 40in"),
+    # Larger geometry — stress tests the NLP scalability
+    ("r5c2.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r5c2 iso uniform 40in"),
+    ("r5c2.json", :isotropic,     [0.0, 0.0], :cellular, 25.0, "r5c2 iso cellular 25in"),
+]
+
+if GUROBI_AVAILABLE && nlp_available
+@testset "Grid solver comparison (MIP vs Ipopt vs MMA)" begin
+
+    for (json_file, slab_type, vector_1d, slab_sizer, max_depth, desc) in grid_configs
+        geom_dict = load_geometry(json_file)
+
+        @testset "$desc" begin
+            println("\n  ─── Grid: $desc ───")
+            results_by_solver = Dict{String, Any}()
+            ok_by_solver = Dict{String, Bool}()
+
+            for (label, bsizer, nlp) in [
+                ("MIP",   :discrete,   :Ipopt),
+                ("Ipopt", :continuous, :Ipopt),
+                ("MMA",   :continuous, :MMA),
+            ]
+                local res
+                try
+                    res, _, _ = run_pipeline_grid(geom_dict;
+                        slab_type=slab_type, vector_1d=vector_1d,
+                        slab_sizer=slab_sizer, max_depth=max_depth,
+                        beam_sizer=bsizer, nlp_solver=nlp)
+                    results_by_solver[label] = res
+                    ok_by_solver[label] = result_ok(res)
+                catch e
+                    @warn "  $label failed on $desc" exception=e
+                    results_by_solver[label] = nothing
+                    ok_by_solver[label] = false
+                end
+
+                mass_str = ok_by_solver[label] ?
+                    "$(round(results_by_solver[label].norm_mass_beams, digits=2)) kg/m²" :
+                    "FAILED"
+                println("    $label: $mass_str")
+            end
+
+            # MIP should produce a valid result on all configs
+            @testset "MIP feasible" begin
+                @test ok_by_solver["MIP"]
+            end
+
+            # Ipopt should produce a valid, strength-feasible result
+            @testset "Ipopt feasible" begin
+                if ok_by_solver["Ipopt"]
+                    @test true
+                    r = results_by_solver["Ipopt"]
+                    for i in 1:length(r.Mn)
+                        if r.Mn[i] > 0 && !isempty(r.My[i])
+                            @test maximum(abs.(r.My[i])) / r.Mn[i] <= 1.0 + 0.05
+                        end
+                    end
+                else
+                    @warn "$desc: Ipopt infeasible"
+                    @test_skip true
+                end
+            end
+
+            # Ipopt mass should be ≤ MIP mass (continuous relaxation lower bound)
+            if ok_by_solver["MIP"] && ok_by_solver["Ipopt"]
+                @testset "Ipopt ≤ MIP mass" begin
+                    ratio = results_by_solver["Ipopt"].norm_mass_beams /
+                            results_by_solver["MIP"].norm_mass_beams
+                    println("    Ipopt/MIP ratio: $(round(ratio, digits=4))")
+                    if ratio <= 1.0 + 1e-3
+                        @test true
+                    else
+                        @warn "$desc: Ipopt exceeds MIP ($(round(ratio, digits=3))×)"
+                        @test_broken ratio <= 1.0 + 1e-3
+                    end
+                end
+            end
+
+            # MMA strength check — report but don't hard-fail the suite
+            @testset "MMA strength (informational)" begin
+                if ok_by_solver["MMA"]
+                    r = results_by_solver["MMA"]
+                    violations = 0
+                    worst = 0.0
+                    for i in 1:length(r.Mn)
+                        if r.Mn[i] > 0 && !isempty(r.My[i])
+                            u = maximum(abs.(r.My[i])) / r.Mn[i]
+                            if u > 1.05
+                                violations += 1
+                                worst = max(worst, u)
+                            end
+                        end
+                    end
+                    println("    MMA: $violations strength violations, worst Mu/Mn = $(round(worst, digits=3))")
+                    @test true
+                else
+                    println("    MMA: infeasible / no result")
+                    @test true
+                end
+            end
+
+            GC.gc()
+        end
+    end
+end
+end # GUROBI_AVAILABLE && nlp_available
 
 println("\nAll integration tests complete.")

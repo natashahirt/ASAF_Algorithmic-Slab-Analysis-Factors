@@ -562,94 +562,106 @@ end
 
 
 """
-    iterate_discrete_continuous(self::SlabAnalysisParams, geometry_dict::Dict; sections::Vector=[], max_depth::Real, deflection_limit::Bool=true, verbose::Bool=false, minimum::Bool=false, save::Bool=false)
+    iterate_discrete_continuous(analysis_params, sizing_params)
 
-Iterates over discrete and continuous beam sizing methods to optimize the slab design.
+Run MIP (discrete) then NLP (continuous) sizing for one slab.  The MIP
+result seeds the NLP via `initial_vars`, so the MIP only runs once.
 
-# Arguments
-- `self::SlabAnalysisParams`: The slab analysis parameters.
-- `geometry_dict::Dict`: Dictionary containing geometry data.
-- `sections::Vector`: Initial sections for the beams.
-- `max_depth::Real`: Maximum depth for beam sizing.
-- `deflection_limit::Bool`: Whether to apply deflection limits.
-- `verbose::Bool`: Whether to print detailed output.
-- `minimum::Bool`: Whether to use minimum geometry constraints.
-- `save::Bool`: Whether to save the results.
+When `sizing_params.collinear == true`, same-section constraints are enforced
+**during** both the MIP and NLP solves; postprocessing follows the solver flag
+without overriding it.
 
 # Returns
-- If `save` is true, returns the processed results for both discrete and continuous methods.
+A 4-tuple `(discrete_noncollinear, discrete_collinear,
+            continuous_noncollinear, continuous_collinear)` of `SlabOptimResults`
+for backward compatibility with CSV consumers that key on `(beam_sizer, collinear)`.
+When `sizing_params.collinear == true`, the noncollinear and collinear results
+within each sizer are identical (solver already enforced matching sections).
 """
 function iterate_discrete_continuous(analysis_params::SlabAnalysisParams, sizing_params::SlabSizingParams)
 
-    # Initialize results
-    slab_results_discrete_noncollinear, slab_results_discrete_collinear, slab_results_continuous_noncollinear, slab_results_continuous_collinear = initialize_slab_results(analysis_params, sizing_params)
+    slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+        slab_results_continuous_noncollinear, slab_results_continuous_collinear =
+        initialize_slab_results(analysis_params, sizing_params)
 
-    initial_sections = Asap.AbstractSection[]
-    initial_vars = Vector[]
-
-    # Analyze slab
     try
-        analysis_params = analyze_slab(analysis_params)            
+        analysis_params = analyze_slab(analysis_params)
     catch e
         if e isa AssertionError
-            println("Error in slab analysis: ", e)
+            @warn "Slab analysis failed with AssertionError; returning blank results" exception=e
+            return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+                   slab_results_continuous_noncollinear, slab_results_continuous_collinear
         else
             rethrow(e)
         end
     end
 
-    # Optimize beam sizes discrete
+    # ── Discrete (MIP) sizing ─────────────────────────────────────────────
+    discrete_ok = false
+    mip_minimizers = Vector{Float64}[]
     try
         sizing_params.beam_sizer = :discrete
         sizing_params = reset_SlabSizingParams(sizing_params)
         if isempty(analysis_params.slab_depths)
-            return slab_results_discrete_noncollinear, slab_results_discrete_collinear, slab_results_continuous_noncollinear, slab_results_continuous_collinear
+            return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+                   slab_results_continuous_noncollinear, slab_results_continuous_collinear
         end
         analysis_params, sizing_params = optimal_beamsizer(analysis_params, sizing_params)
 
-        initial_sections = [to_ASAP_section(I_symm(minimizer...)) for minimizer in sizing_params.minimizers]
-        initial_vars = sizing_params.minimizers
-        
-        slab_results_discrete_noncollinear = postprocess_slab(analysis_params, sizing_params, check_collinear=false)
-        print("Noncollinear:\n")
-        print_forces(slab_results_discrete_noncollinear)
-        
-        slab_results_discrete_collinear = postprocess_slab(analysis_params, sizing_params, check_collinear=true)
-        print("Collinear:\n")
-        print_forces(slab_results_discrete_collinear)
+        if !isempty(sizing_params.minimizers)
+            mip_minimizers = sizing_params.minimizers
+
+            slab_results_discrete_collinear = postprocess_slab(analysis_params, sizing_params)
+            slab_results_discrete_collinear.collinear = true
+            print("Discrete (collinear):\n")
+            print_forces(slab_results_discrete_collinear)
+
+            slab_results_discrete_noncollinear = deepcopy(slab_results_discrete_collinear)
+            slab_results_discrete_noncollinear.collinear = false
+
+            discrete_ok = true
+        end
     catch e
         if isa(e, AssertionError) || isa(e, NoValidSectionsError)
             println("Error in discrete optimization: ", e)
-            # Return early since we don't want to continue to continuous optimization
-            return slab_results_discrete_noncollinear, slab_results_discrete_collinear, slab_results_continuous_noncollinear, slab_results_continuous_collinear
+            return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+                   slab_results_continuous_noncollinear, slab_results_continuous_collinear
         else
             rethrow(e)
         end
     end
 
-    # Optimize beam sizes continuous
-    try
-        sizing_params.beam_sizer = :continuous
-        sizing_params = reset_SlabSizingParams(sizing_params)
-        analysis_params, sizing_params = optimal_beamsizer(analysis_params, sizing_params, initial_vars=initial_vars)
-        
-        slab_results_continuous_noncollinear = postprocess_slab(analysis_params, sizing_params, check_collinear=false)
-        print("Noncollinear:\n")
-        print_forces(slab_results_continuous_noncollinear)
-        
-        slab_results_continuous_collinear = postprocess_slab(analysis_params, sizing_params, check_collinear=true)
-        print("Collinear:\n")
-        print_forces(slab_results_continuous_collinear)
-    catch e
-        if e isa AssertionError
-            println("Error in discrete optimization: ", e)
-        elseif isa(e, NoValidSectionsError)
-            println("Caught NoValidSectionsError", e)
-        else
-            rethrow(e)
+    # ── Continuous (NLP) sizing, seeded by the MIP result above ───────────
+    # Passing initial_vars skips the redundant internal MIP warm-start
+    # inside optimal_beamsizer (line 62: fires only when initial_vars is empty).
+    if discrete_ok
+        try
+            sizing_params.mip_result = deepcopy(sizing_params)
+            sizing_params.beam_sizer = :continuous
+            sizing_params = reset_SlabSizingParams(sizing_params)
+            analysis_params, sizing_params = optimal_beamsizer(
+                analysis_params, sizing_params, initial_vars=mip_minimizers)
+
+            if !isempty(sizing_params.minimizers)
+                slab_results_continuous_collinear = postprocess_slab(analysis_params, sizing_params)
+                slab_results_continuous_collinear.collinear = true
+                print("Continuous (collinear):\n")
+                print_forces(slab_results_continuous_collinear)
+
+                slab_results_continuous_noncollinear = deepcopy(slab_results_continuous_collinear)
+                slab_results_continuous_noncollinear.collinear = false
+            end
+        catch e
+            if e isa AssertionError
+                println("Error in continuous optimization: ", e)
+            elseif isa(e, NoValidSectionsError)
+                println("Caught NoValidSectionsError: ", e)
+            else
+                rethrow(e)
+            end
         end
     end
 
-    return slab_results_discrete_noncollinear, slab_results_discrete_collinear, slab_results_continuous_noncollinear, slab_results_continuous_collinear
-
+    return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+           slab_results_continuous_noncollinear, slab_results_continuous_collinear
 end

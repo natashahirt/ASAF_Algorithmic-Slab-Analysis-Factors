@@ -10,7 +10,9 @@ _REPO_ROOT="$(cd "${_SCRIPT_DIR}/../.." && pwd)"
 # all shard completion markers are present.
 
 SLURM_SCRIPT="${SLURM_SCRIPT:-SlabDesignFactors/executable/executable_analyze_array.slurm}"
-RESULTS_ROOT="${RESULTS_ROOT:-SlabDesignFactors/results/remote_results_full_sweep}"
+# One id per wrapper invocation (logs/outputs/results root suffix; override with JOB_LOG_ID).
+JOB_LOG_ID="${JOB_LOG_ID:-analyze_array_$(date +%Y%m%d_%H%M%S)_$$}"
+RESULTS_ROOT="${RESULTS_ROOT:-SlabDesignFactors/results/remote_results_full_sweep_${JOB_LOG_ID}}"
 RUN_NAME="${RUN_NAME:-full_sweep}"
 COMPLETION_DIR="${COMPLETION_DIR:-${RESULTS_ROOT}/completion}"
 PARAMS_FILE="${PARAMS_FILE:-${_REPO_ROOT}/SlabDesignFactors/executable/params.txt}"
@@ -20,8 +22,6 @@ MAX_RESUBMISSIONS="${MAX_RESUBMISSIONS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 MERGE_SCRIPT="${MERGE_SCRIPT:-SlabDesignFactors/executable/executable_merge_shards.jl}"
 MERGED_DIR="${MERGED_DIR:-${RESULTS_ROOT}/merged}"
-# One folder per wrapper invocation (override with JOB_LOG_ID).
-JOB_LOG_ID="${JOB_LOG_ID:-analyze_array_$(date +%Y%m%d_%H%M%S)_$$}"
 OUT_JOB_DIR="${_REPO_ROOT}/outputs/${JOB_LOG_ID}"
 LOG_JOB_DIR="${_REPO_ROOT}/logs/${JOB_LOG_ID}"
 mkdir -p "$OUT_JOB_DIR" "$LOG_JOB_DIR"

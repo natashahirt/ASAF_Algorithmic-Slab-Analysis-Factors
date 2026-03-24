@@ -386,7 +386,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
 
             slab_params = SlabDesignFactors.analyze_slab(slab_params)
             slab_params, sizing_params = SlabDesignFactors.optimal_beamsizer(slab_params, sizing_params)
-            results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params, check_collinear=false)
+            results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params)
 
             n_beams = length(results.Δ_local)
             max_δ = maximum(maximum(abs.(d)) for d in results.Δ_local if !isempty(d); init=0.0)
@@ -652,7 +652,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             )
 
             beam_sizer = cfg.solver == :MIP ? :discrete : :continuous
-            nlp_solver = cfg.solver == :MIP ? :MMA : cfg.solver
+            nlp_solver = cfg.solver == :MIP ? :Ipopt : cfg.solver
 
             sizing_params = SlabDesignFactors.SlabSizingParams(
                 live_load=DEFAULT_LIVE_LOAD,
@@ -683,7 +683,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             end
 
             if !isempty(sizing_params.minimizers)
-                results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params, check_collinear=false)
+                results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params)
                 n_beams = length(results.Δ_local)
                 n_strips = length(slab_params.load_areas)
                 norm_mass_beams = results.norm_mass_beams
@@ -929,7 +929,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
             slab_params, sizing_params = SlabDesignFactors.optimal_beamsizer(slab_params, sizing_params)
 
             if !isempty(sizing_params.minimizers)
-                results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params, check_collinear=false)
+                results = SlabDesignFactors.postprocess_slab(slab_params, sizing_params)
                 beam_sizer_str = String(results.beam_sizer)
                 nlp_solver_out = results.nlp_solver
                 deflection_limit_out = results.deflection_limit

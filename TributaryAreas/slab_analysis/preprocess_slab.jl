@@ -16,6 +16,12 @@ Calculate the self-weight of a slab based on its type and analysis method.
 - `slab_depths`: Calculated slab depths.
 - `slab_loads`: Slab loads in kN/m².
 """
+function _apply_slab_depth_minimum(self::SlabAnalysisParams, slab_depths::Vector{<:Real})::Vector{Float64}
+    _floor = 0.001 / convert_to_m[self.slab_units]
+    dmin = max(Float64(self.slab_depth_minimum), _floor)
+    return Float64[max(Float64(d), dmin) for d in slab_depths]
+end
+
 function get_slab_depths(self::SlabAnalysisParams, cycles, elements; precision::Int64=4)
     max_spans = calculate_max_spans(self, cycles, elements)
 
@@ -24,7 +30,8 @@ function get_slab_depths(self::SlabAnalysisParams, cycles, elements; precision::
     else
         slab_depths = calculate_slab_depths(max_spans, self.slab_type)
     end
-    
+    slab_depths = _apply_slab_depth_minimum(self, slab_depths)
+
     if self.slab_sizer == :cellular
         print_results(max_spans, slab_depths, precision)
         return max_spans, slab_depths

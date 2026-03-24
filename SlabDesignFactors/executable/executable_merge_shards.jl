@@ -52,6 +52,26 @@ function has_nested_shard_dirs(shards_dir::String)::Bool
     end
 end
 
+"""Merge file-path lists from nested and flat discovery (same `results_name` → concatenate, dedupe)."""
+function _merge_shard_groups(
+    a::Dict{String, Vector{String}},
+    b::Dict{String, Vector{String}},
+)::Dict{String, Vector{String}}
+    out = Dict{String, Vector{String}}()
+    for (k, v) in a
+        out[k] = copy(v)
+    end
+    for (k, v) in b
+        if haskey(out, k)
+            append!(out[k], v)
+            unique!(sort!(out[k]))
+        else
+            out[k] = copy(v)
+        end
+    end
+    return out
+end
+
 """
     merge_shards(results_root, run_name, merged_dir)
 
@@ -68,15 +88,18 @@ function merge_shards(results_root::String, run_name::String, merged_dir::String
     end
     mkpath(merged_dir)
 
-    grouped = if has_nested_shard_dirs(shards_dir)
-        discover_shard_csvs_nested(shards_dir)
-    else
-        discover_shard_csvs_flat(shards_dir)
-    end
+    # Use both layouts: empty `shard_NNN/` dirs still let us pick up legacy flat `*_shard_*.csv` in `shards/`.
+    grouped = _merge_shard_groups(
+        discover_shard_csvs_nested(shards_dir),
+        discover_shard_csvs_flat(shards_dir),
+    )
 
     if isempty(grouped)
-        println("No shard CSV files found in $shards_dir")
-        return
+        error(
+            "No shard CSV files found under $shards_dir. " *
+            "Shard `.complete` markers can exist even if every config failed (no rows written). " *
+            "Inspect Slurm `.err` for `run_one_config` / solver failures.",
+        )
     end
 
     dedupe_cols = [

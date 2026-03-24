@@ -9,7 +9,7 @@ All `.slurm` scripts here use `-p mit_normal`, then `module load community-modul
 | Pipeline | What it runs | Default results directory | Slurm script | Wrapper (resubmit until done) |
 |----------|----------------|---------------------------|--------------|--------------------------------|
 | **Experiments** | Named studies (`max_depths`, `validation_mip`, …) | `SlabDesignFactors/results/remote_results_experiments/` | `executable_experiments_array.slurm` | `executable_experiments_array_wrapper.bash` |
-| **Full sweep** | Cartesian product from `params.txt` | `SlabDesignFactors/results/remote_results_full_sweep/` | `executable_analyze_array.slurm` | `executable_analyze_array_wrapper.bash` |
+| **Full sweep** | Cartesian product from `params.txt` | Wrapper default: `SlabDesignFactors/results/remote_results_full_sweep_<JOB_LOG_ID>/` (direct `sbatch`: `.../remote_results_full_sweep/`) | `executable_analyze_array.slurm` | `executable_analyze_array_wrapper.bash` |
 
 They do **not** depend on each other.
 
@@ -56,7 +56,7 @@ CLI:
 
 ## Full sweep layout
 
-With `RESULTS_ROOT=.../remote_results_full_sweep` and `RUN_NAME=full_sweep`:
+With `RESULTS_ROOT=.../remote_results_full_sweep` (or `.../remote_results_full_sweep_<JOB_LOG_ID>` from the analyze wrapper) and `RUN_NAME=full_sweep`:
 
 - Shards: `RESULTS_ROOT/RUN_NAME/shards/shard_<id>/<name>.csv` (one folder per shard)  
 - Progress: `RESULTS_ROOT/RUN_NAME/progress/progress_shard_<id>.json`  
@@ -73,7 +73,9 @@ Both wrappers resubmit until the run finishes (12 h walltime chunks). Each **wra
 - `logs/<JOB_LOG_ID>/wrapper.log` — tee of everything printed on the terminal  
 - `outputs/<JOB_LOG_ID>/slurm_%A_%a.out` / `.err` — Slurm stdout/stderr per array task (each `sbatch` in a resubmit loop uses the same folder so filenames stay unique by job id)
 
-Set **`JOB_LOG_ID=my_label`** to choose the folder names; set **`LOG_FILE`** to override the wrapper log path.
+For the **analyze** wrapper, the default **`RESULTS_ROOT`** is `SlabDesignFactors/results/remote_results_full_sweep_<JOB_LOG_ID>/` so results share the same trace id as `logs/` and `outputs/`. Override with **`RESULTS_ROOT=...`** for a fixed path (e.g. resume into an existing tree).
+
+Set **`JOB_LOG_ID=my_label`** to choose the id (and thus the default results folder suffix); set **`LOG_FILE`** to override the wrapper log path.
 
 **Direct** `sbatch` (no wrapper) writes flat files: `outputs/slurm_analyze_%A_%a.out` or `outputs/slurm_experiments_%A_%a.out` (still under repo `outputs/`).
 

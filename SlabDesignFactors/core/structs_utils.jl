@@ -21,6 +21,8 @@ function reset_SlabAnalysisParams(self::SlabAnalysisParams, model::Asap.Model; p
         slab_name=self.slab_name,
         slab_type=self.slab_type,
         vector_1d=self.vector_1d,
+        slab_thickness=self.slab_thickness,
+        slab_depth_minimum=self.slab_depth_minimum,
         slab_sizer=self.slab_sizer,
         fix_param=self.fix_param,
         spacing=self.spacing,

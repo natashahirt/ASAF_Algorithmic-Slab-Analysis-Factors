@@ -18,6 +18,7 @@ using Test
     @testset "Unit tests" begin
         include("test_structs.jl")
         include("test_compression.jl")
+        include("test_slab_depth_minimum.jl")
         include("test_staged_deflection.jl")
     end
     @testset "Integration tests" begin

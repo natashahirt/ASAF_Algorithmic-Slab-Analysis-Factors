@@ -23,6 +23,12 @@ end
     SlabAnalysisParams
 
 Parameters for slab analysis, including pre-sizing and post-sizing attributes.
+
+Use `slab_depth_minimum` (same units as `slab_units`) to clamp slab depths **after**
+the span-based thickness (or fixed `slab_thickness`) is computed, before loads are
+assembled. The default ``0`` is stored as ``0.001`` m (in your `slab_units`) so depths
+never sit below that numerical floor; larger requests are kept and also cannot fall
+below ``0.001`` m.
 """
 mutable struct SlabAnalysisParams <: AbstractOptParams
     model::Asap.Model               # The model
@@ -31,6 +37,10 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
     load_type::Symbol              # :determinate or :indeterminate
     vector_1d::Vector{<:Real}      # Direction of uniaxial slab
     slab_thickness::Real          # Slab thickness [slab length units, typically m]
+    """Minimum slab depth after span-based thickness. Same units as `slab_thickness`.
+    `0` means use the default floor (`0.001` m in `slab_units`). Any other value is
+    raised to at least that same floor."""
+    slab_depth_minimum::Real
     perp::Bool                    # Whether to use the perpendicular direction
     perp_vector_1d::Vector{<:Real} # Perpendicular direction of orth_biaxial slab
     slab_sizer::Symbol             # :cellular or :uniform
@@ -59,6 +69,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
                               load_type::Symbol=:determinate,
                               vector_1d::Vector{<:Real}=[1.0, 0.0],
                               slab_thickness::Real=0.0,
+                              slab_depth_minimum::Real=0.0,
                               perp::Bool=false,
                               perp_vector_1d::Vector{<:Real}=[0.0, -1.0],
                               slab_sizer::Symbol=:cellular,
@@ -84,12 +95,15 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
         @assert (slab_type in [:isotropic, :uniaxial, :orth_biaxial]) "Invalid slab type."
         @assert (slab_sizer in [:cellular, :uniform]) "Invalid slab sizing method."
         @assert (load_type in [:determinate, :indeterminate]) "Invalid load type."
-        
+        @assert slab_depth_minimum >= 0 "slab_depth_minimum must be ≥ 0."
+        _floor_in_slab_units = 0.001 / convert_to_m[slab_units]
+        slab_depth_minimum = max(slab_depth_minimum, _floor_in_slab_units)
+
         plot_context = PlotContext(plot_analysis, nothing, nothing)
         vector_1d = Float64.(vector_1d)
         element_id_lookup_df = get_element_id(model)
 
-        new(model, slab_name, slab_type, load_type, vector_1d, slab_thickness, perp, perp_vector_1d, slab_sizer, fix_param, spacing, area, areas, 
+        new(model, slab_name, slab_type, load_type, vector_1d, slab_thickness, slab_depth_minimum, perp, perp_vector_1d, slab_sizer, fix_param, spacing, area, areas, 
             load_areas, load_volumes, load_widths, max_spans, slab_depths, plot_context, load_dictionary, trib_dictionary, record_tributaries, slab_units, raster_df, element_id_lookup_df, i_holes, i_perimeter)
     end
 end
@@ -111,7 +125,7 @@ mutable struct SlabSizingParams
     live_factor::Real             # Live load factor [-]
     dead_factor::Real            # Dead load factor [-]
     beam_sizer::Symbol              # :discrete or :continuous
-    nlp_solver::Symbol              # :MMA (NLopt LD_MMA) or :Ipopt
+    nlp_solver::Symbol              # :Ipopt, :MMA (NLopt LD_MMA), :SLSQP, :CCSAQ, :COBYLA
     max_depth::Real                  # Maximum allowable depth for the assembly
     beam_units::Symbol              # Unit of measurement for beams (:m, :mm, :in, :ft)
 
@@ -184,7 +198,7 @@ mutable struct SlabSizingParams
         live_factor::Real=1.0,             # Live load factor [-]
         dead_factor::Real=1.0,            # Dead load factor [-]
         beam_sizer::Symbol=:discrete,         # :discrete or :continuous
-        nlp_solver::Symbol=:MMA,              # :MMA (NLopt LD_MMA) or :Ipopt
+        nlp_solver::Symbol=:Ipopt,             # :Ipopt, :MMA (NLopt LD_MMA), :SLSQP, :CCSAQ, :COBYLA
         max_depth::Real=0.0,                  # Maximum allowable depth for the assembly
 
         # default input values

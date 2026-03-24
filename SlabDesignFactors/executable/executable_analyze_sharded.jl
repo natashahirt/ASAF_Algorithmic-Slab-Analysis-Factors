@@ -45,7 +45,7 @@ Canonical config identity used for resume logic.
 function config_key(
     name::String,
     slab_sizer::Symbol,
-    max_depth::Int,
+    max_depth::Real,
     slab_type::Symbol,
     vector_1d::Vector{Float64},
 )::NTuple{6, Any}
@@ -169,8 +169,6 @@ function run_one_config(cfg)::Union{Vector{SlabDesignFactors.SlabOptimResults}, 
             slab_units=:m,
         )
 
-        # Loads/factors match `run_max_depths` / `full_sweep_defaults.jl`
-        # (struct defaults: slab_dead_load=0, deflection_limit=true).
         beam_sizing_params = SlabDesignFactors.SlabSizingParams(
             live_load=SlabDesignFactors.FULL_SWEEP_LIVE_LOAD,
             superimposed_dead_load=SlabDesignFactors.FULL_SWEEP_SUPERIMPOSED_DEAD_LOAD,
@@ -181,6 +179,9 @@ function run_one_config(cfg)::Union{Vector{SlabDesignFactors.SlabOptimResults}, 
             beam_units=:in,
             serviceability_lim=SlabDesignFactors.FULL_SWEEP_SERVICEABILITY_LIM,
             minimum_continuous=true,
+            collinear=SlabDesignFactors.FULL_SWEEP_COLLINEAR,
+            composite_action=SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION,
+            deflection_reduction_factor=SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR,
         )
 
         return collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))

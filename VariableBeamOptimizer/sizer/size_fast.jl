@@ -1084,6 +1084,15 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
         # ── solve ────────────────────────────────────────────────────────
         JuMP.optimize!(jump_model)
 
+        status = JuMP.termination_status(jump_model)
+        if status ∉ (JuMP.MOI.LOCALLY_SOLVED, JuMP.MOI.OPTIMAL,
+                      JuMP.MOI.ALMOST_LOCALLY_SOLVED, JuMP.MOI.ALMOST_OPTIMAL)
+            @warn "Continuous optimization did not converge " *
+                  "(status: $status, demand iter $demand_iter/$max_demand_iters). " *
+                  "Using best solution found so far."
+            break
+        end
+
         optimal_h = JuMP.value.(h)
         optimal_w = JuMP.value.(w)
         optimal_tw = JuMP.value.(tw)
