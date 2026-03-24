@@ -3,7 +3,6 @@ using Reexport
 using Asap, LinearAlgebra, Statistics, Interpolations, SparseArrays
 using JSON
 using XLSX
-using Unitful
 
 include("Generation/Generators.jl")
 export Frame
@@ -27,6 +26,7 @@ export to_frame
 include("ForceAnalysis/forceFunctions.jl")
 include("ForceAnalysis/Translations.jl")
 include("ForceAnalysis/ForceAnalysis.jl")
+export get_release_type, asap_release_symbol, release2DOF, MPointLoad, VPointLoad
 export groupbyid
 export InternalForces
 export forces

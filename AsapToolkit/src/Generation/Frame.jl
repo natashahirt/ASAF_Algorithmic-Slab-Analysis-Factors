@@ -113,19 +113,11 @@ function Frame(nx::Integer,
     # nodes
     ########
 
-    # Convert base and offsets to Unitful (promote Float64 → Quantity)
-    base_unitful = [b * u"m" for b in base]
-    xoffset = [dx * u"m", 0.0u"m", 0.0u"m"]
-    yoffset = [0.0u"m", dy * u"m", 0.0u"m"]
-    zoffset = [0.0u"m", 0.0u"m", dz * u"m"]
+    nodes = [Node(base .+ [dx * i, dy * j, dz * k], :pinned) for i in 0:nx, j in 0:ny, k in 0:nz]
 
-    #generate
-    nodes = [Node(base_unitful + xoffset * i + yoffset * j + zoffset * k, :pinned) for i in 0:nx, j in 0:ny, k in 0:nz]
-
-    #release non-ground nodes (strip units for comparison)
-    base_z = base[3]  # Float64 base z coordinate
+    base_z = base[3]
     for node in nodes
-        node_z = ustrip(u"m", uconvert(u"m", last(node.position)))
+        node_z = last(node.position)
         if node_z > base_z
             fixnode!(node, :free)
         end
@@ -248,7 +240,7 @@ function Frame(nx::Integer,
     # dummy load and assembly
     ######
 
-    loads = [LineLoad(j, [0.0u"N/m", 0.0u"N/m", -1.0u"N/m"]) for j in secondaries]
+    loads = [LineLoad(j, [0.0, 0.0, -1.0]) for j in secondaries]
     flatnodes = vec(nodes)
     elements = [columns; primaries; secondaries; braces]
 
@@ -267,14 +259,12 @@ function Frame(nx::Integer,
     yExtrema = [base[2], base[2] + dy * ny]
     for (i,element) in enumerate(model.elements)
         if element.id == :joist
-            # Strip units from position (convert Quantity → Float64)
-            x = ustrip(u"m", uconvert(u"m", element.nodeStart.position[1]))
+            x = element.nodeStart.position[1]
             if minimum(abs.(xExtrema .- x)) <= model.tol
                 push!(iExteriorXjoists, i)
             end
         elseif element.id == :primary
-            # Strip units from position (convert Quantity → Float64)
-            y = ustrip(u"m", uconvert(u"m", element.nodeStart.position[2]))
+            y = element.nodeStart.position[2]
             if minimum(abs.(yExtrema .- y)) <= model.tol
                 push!(iExteriorYprimary, i)
             end

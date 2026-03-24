@@ -1,8 +1,8 @@
-function to_truss(gs::GroundStructure, section::Asap.AbstractSection; load = [1.0u"N", 0.0u"N", 0.0u"N"], support = :xy, planar = true)
+function to_truss(gs::GroundStructure, section::Asap.AbstractSection; load = [1.0, 0.0, 0.0], support = :xy, planar = true)
 
     @assert in(support, [:xy, :x, :y, :corner])
 
-    nodes = [TrussNode([xy[1] * u"m", xy[2] * u"m", 0.0u"m"], :free, :free) for xy in gs.xy]
+    nodes = [TrussNode([xy[1], xy[2], 0.0], :free, :free) for xy in gs.xy]
 
     if support == :xy
         isupport = [gs.igrid[[1,end],:][:]; gs.igrid[2:end-1, [1,end]][:]]
@@ -33,12 +33,12 @@ function to_truss(gs::GroundStructure, section::Asap.AbstractSection; load = [1.
 
 end
 
-function to_frame(gs::GroundStructure, section::Asap.Section; load = [0.0u"N", 0.0u"N", -1.0u"N"], support = :xy, planar = false, support_type = :pinned)
+function to_frame(gs::GroundStructure, section::Asap.Section; load = [0.0, 0.0, -1.0], support = :xy, planar = false, support_type = :pinned)
 
     @assert in(support, [:xy, :x, :y, :corner])
     @assert in(support_type, [:pinned, :fixed])
 
-    nodes = [Node([xy[1] * u"m", xy[2] * u"m", 0.0u"m"], :free, :free) for xy in gs.xy]
+    nodes = [Node([xy[1], xy[2], 0.0], :free, :free) for xy in gs.xy]
 
     if support == :xy
         isupport = [gs.igrid[[1,end],:][:]; gs.igrid[2:end-1, [1,end]][:]]

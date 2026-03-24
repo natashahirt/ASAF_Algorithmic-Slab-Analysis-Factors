@@ -9,44 +9,24 @@ struct GHnode
     id::String
 
     function GHnode(node::TrussNode)
-        # Strip units from position (convert Quantity → Float64)
-        position = [ustrip(u"m", uconvert(u"m", p)) for p in node.position]
+        position = copy(node.position)
         dof = [node.dof; [true, true, true]]
         nodeID = node.nodeID - 1
-        # Strip units from reactions (N → Float64) and displacements (m → Float64)
-        reaction = [ustrip(u"N", uconvert(u"N", r)) for r in node.reaction]
-        u = [ustrip(u"m", uconvert(u"m", d)) for d in node.displacement]
-        displacement = [ustrip(u"m", uconvert(u"m", d)) for d in node.displacement[1:3]]
+        reaction = Vector{Float64}(node.reaction)
+        u = Vector{Float64}(node.displacement)
+        displacement = Vector{Float64}(node.displacement[1:3])
         id = isnothing(node.id) ? "" : string(node.id)
 
         return new(position, dof, nodeID, reaction, u, displacement, id)
     end
 
     function GHnode(node::Node)
-        # Strip units from position (convert Quantity → Float64)
-        position = [ustrip(u"m", uconvert(u"m", p)) for p in node.position]
+        position = copy(node.position)
         dof = node.dof
         nodeID = node.nodeID - 1
-        # Strip units from reactions and displacements
-        # Reactions: DOFs 1-3 are forces (N), DOFs 4-6 are moments (N*m)
-        # Displacements: DOFs 1-3 are translations (m), DOFs 4-6 are rotations (rad)
-        reaction = Vector{Float64}(undef, length(node.reaction))
-        for (i, r) in enumerate(node.reaction)
-            if i <= 3
-                reaction[i] = ustrip(u"N", uconvert(u"N", r))
-            else
-                reaction[i] = ustrip(u"N*m", uconvert(u"N*m", r))
-            end
-        end
-        u = Vector{Float64}(undef, length(node.displacement))
-        for (i, d) in enumerate(node.displacement)
-            if i <= 3
-                u[i] = ustrip(u"m", uconvert(u"m", d))
-            else
-                u[i] = ustrip(d)  # radians are dimensionless
-            end
-        end
-        displacement = [ustrip(u"m", uconvert(u"m", d)) for d in node.displacement[1:3]]
+        reaction = Vector{Float64}(node.reaction)
+        u = Vector{Float64}(node.displacement)
+        displacement = Vector{Float64}(node.displacement[1:3])
         id = isnothing(node.id) ? "" : string(node.id)
 
         return new(position, dof, nodeID, reaction, u, displacement, id)
@@ -64,20 +44,18 @@ struct GHsection
     J::Float64
 
     function GHsection(section::TrussSection)
-        # Strip units from section properties (convert Quantity → Float64)
-        E = ustrip(u"Pa", uconvert(u"Pa", section.E))
-        A = ustrip(u"m^2", uconvert(u"m^2", section.A))
+        E = section.E
+        A = section.A
         return new(E, 1.0, A, 1.0, 1.0, 1.0)
     end
 
     function GHsection(section::Section)
-        # Strip units from section properties (convert Quantity → Float64)
-        E = ustrip(u"Pa", uconvert(u"Pa", section.E))
-        G = ustrip(u"Pa", uconvert(u"Pa", section.G))
-        A = ustrip(u"m^2", uconvert(u"m^2", section.A))
-        Ix = ustrip(u"m^4", uconvert(u"m^4", section.Ix))
-        Iy = ustrip(u"m^4", uconvert(u"m^4", section.Iy))
-        J = ustrip(u"m^4", uconvert(u"m^4", section.J))
+        E = section.E
+        G = section.G
+        A = section.A
+        Ix = section.Ix
+        Iy = section.Iy
+        J = section.J
         return new(E, G, A, Ix, Iy, J)
     end
 end
@@ -149,9 +127,8 @@ struct GHnodeforce <: GHload
 end
 
 function GHload(load::NodeForce)
-    # Strip units from load value (convert Quantity → Float64)
     i = load.node.nodeID - 1
-    value = [ustrip(u"N", uconvert(u"N", v)) for v in load.value]
+    value = Vector{Float64}(load.value)
     id = isnothing(load.id) ? "" : string(load.id)
 
     return GHnodeforce(value, id, i)
@@ -164,9 +141,8 @@ struct GHnodemoment <: GHload
 end
 
 function GHload(load::NodeMoment)
-    # Strip units from load value (convert Quantity → Float64)
     i = load.node.nodeID - 1
-    value = [ustrip(u"N*m", uconvert(u"N*m", v)) for v in load.value]
+    value = Vector{Float64}(load.value)
     id = isnothing(load.id) ? "" : string(load.id)
 
     return GHnodemoment(value, id, i)
@@ -179,9 +155,8 @@ struct GHlineload <: GHload
 end
 
 function GHload(load::LineLoad)
-    # Strip units from load value (convert Quantity → Float64)
     i = load.element.elementID - 1
-    value = [ustrip(u"N/m", uconvert(u"N/m", v)) for v in load.value]
+    value = Vector{Float64}(load.value)
     id = isnothing(load.id) ? "" : string(load.id)
 
     return GHlineload(value, id, i)
@@ -195,9 +170,8 @@ struct GHpointload <: GHload
 end
 
 function GHload(load::PointLoad)
-    # Strip units from load value (convert Quantity → Float64)
     i = load.element.elementID - 1
-    value = [ustrip(u"N", uconvert(u"N", v)) for v in load.value]
+    value = Vector{Float64}(load.value)
     id = isnothing(load.id) ? "" : string(load.id)
     x = load.position  # position is dimensionless Float64
 

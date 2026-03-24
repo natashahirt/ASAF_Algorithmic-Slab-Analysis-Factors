@@ -1169,7 +1169,7 @@ end
 function internalforces_M_V(beam_element::Element, beam_loads::Vector{Asap.AbstractLoad}; resolution::Int=200)
 
     uglobal = [beam_element.nodeStart.displacement; beam_element.nodeEnd.displacement]
-    release = AsapToolkit.get_release(beam_element)
+    release = AsapToolkit.get_release_type(beam_element)
     r2dof = AsapToolkit.release2DOF[release]
     Flocal = (beam_element.R * beam_element.K * uglobal) .* r2dof
     Vystart =  Flocal[2]
@@ -1202,7 +1202,7 @@ end
 function internalforces_M_V_all(beam_element::Element, beam_loads::Vector{Asap.AbstractLoad}; resolution::Int=200)
 
     uglobal = [beam_element.nodeStart.displacement; beam_element.nodeEnd.displacement]
-    release = AsapToolkit.get_release(beam_element)
+    release = AsapToolkit.get_release_type(beam_element)
     r2dof = AsapToolkit.release2DOF[release]
     Flocal = (beam_element.R * beam_element.K * uglobal) .* r2dof
     Vystart =  Flocal[2]

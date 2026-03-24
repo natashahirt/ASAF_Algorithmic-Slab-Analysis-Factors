@@ -1,5 +1,5 @@
 """
-    GridNetwork(nx, Lx, ny, Ly, q = 1.0; load = [0.0u"N", 0.0u"N", 1.0u"N"], support = :corner)
+    GridNetwork(nx, Lx, ny, Ly, q = 1.0; load = [0.0, 0.0, 1.0], support = :corner)
 
 Generate a grid-topology Force Density Network.
 
@@ -11,7 +11,7 @@ Generate a grid-topology Force Density Network.
 - `q::Real` force density of elements. Defaults to 1.0.
 
 # Optional arguments
-- `load::Vector{QuantityForce}` force applied to all free nodes
+- `load::Vector{<:Real}` nodal force (N) applied to all free nodes
 - `support = :corner` nodes to fix. Choose from: :corner, :x, :y, :xy
 
 # Return
@@ -40,7 +40,7 @@ struct GridNetwork <: AbstractGenerator
     dy::Real
     igrid::Matrix{Int64}
 
-    function GridNetwork(nx::Integer, Lx::Real, ny::Integer, Ly::Real, q::Real = 1.0; load = [0.0u"N", 0.0u"N", 1.0u"N"], support = :corner)
+    function GridNetwork(nx::Integer, Lx::Real, ny::Integer, Ly::Real, q::Real = 1.0; load = [0.0, 0.0, 1.0], support = :corner)
 
         dx = Lx / nx
         dy = Ly / ny

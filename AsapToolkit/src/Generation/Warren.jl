@@ -25,7 +25,7 @@ function Warren2D(n::Integer,
         dx::Real,
         dy::Real,
         section::Asap.AbstractSection;
-        load = [0.0u"N", -1.0u"N", 0.0u"N"],
+        load = [0.0, -1.0, 0.0],
         type = :arch)
 
     @assert n % 2 != 0 "n must be odd"
@@ -52,7 +52,7 @@ function Warren2D(n::Integer,
     for i = 1:n
         xposition = dx * (i - 1)
 
-        node = TrussNode([xposition * u"m", 0.0u"m", 0.0u"m"], :free)
+        node = TrussNode([xposition, 0.0, 0.0], :free)
         if i == 1
             node.dof = [false, false, false]
             node.id = :pin
@@ -76,7 +76,7 @@ function Warren2D(n::Integer,
     for i = 1:n-1
         xposition = x0 + dx * (i - 1)
 
-        node = TrussNode([xposition * u"m", y * u"m", 0.0u"m"], :free)
+        node = TrussNode([xposition, y, 0.0], :free)
         node.id = shortid
 
         push!(nodes, node)
@@ -160,7 +160,7 @@ function Warren2D(xpositions::Vector{<:Real},
     ## generate long chord up to symmetry
     for (x, y) in zip(xpositions, ypositions)
 
-        node = TrussNode([x * u"m", y * u"m", 0.0u"m"], :free)
+        node = TrussNode([x, y, 0.0], :free)
         if i == 1
             node.dof = [false, false, false]
             node.id = :pin
@@ -178,7 +178,7 @@ function Warren2D(xpositions::Vector{<:Real},
     Lhalf = last(xpositions)
     incs = Lhalf .- reverse(xpositions[1:end-1])
     for (inc, y) in zip(incs, reverse(ypositions[1:end-1]))
-        node = TrussNode([inc * u"m", y * u"m", 0.0u"m"], :free)
+        node = TrussNode([inc, y, 0.0], :free)
         node.id = longid
         push!(nodes, node)
         push!(longids, count)
@@ -194,7 +194,7 @@ function Warren2D(xpositions::Vector{<:Real},
 
         xposition = mean(xpositions[i:i+1])
 
-        node = TrussNode([xposition * u"m", ypositions2[i] * u"m", 0.0u"m"], :free)
+        node = TrussNode([xposition, ypositions2[i], 0.0], :free)
         node.id = shortid
 
         push!(nodes, node)
@@ -206,7 +206,7 @@ function Warren2D(xpositions::Vector{<:Real},
     for (i, y) in zip(length(xpositions):length(longids), reverse(ypositions2))
         x = first(mean(getproperty.(nodes, :position)[i:i+1]))
 
-        node = TrussNode([x * u"m", y * u"m", 0.0u"m"], :free)
+        node = TrussNode([x, y, 0.0], :free)
         node.id = shortid
 
         push!(nodes, node)
@@ -247,7 +247,7 @@ function Warren2D(xpositions::Vector{<:Real},
     end
 
     #dummy load
-    loads = [NodeForce(n, [0.0u"N", -1.0u"N", 0.0u"N"]) for n in nodes[longid]]
+    loads = [NodeForce(n, [0.0, -1.0, 0.0]) for n in nodes[longid]]
 
     #assemble and solve
     model = TrussModel(nodes, elements, loads)

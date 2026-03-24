@@ -10,11 +10,9 @@ function accumulate_force!(load::LineLoad,
     Vz::Vector{Float64})
 
     R = load.element.R[1:3, 1:3]
-    # Strip units from length (convert Quantity → Float64)
-    L = ustrip(u"m", uconvert(u"m", load.element.length))
+    L = load.element.length
 
-    # distributed load magnitudes in LCS (strip units from load.value)
-    value_stripped = [ustrip(u"N/m", uconvert(u"N/m", v)) for v in load.value]
+    value_stripped = load.value
     wx, wy, wz = (R * value_stripped) .* [1, -1, -1]
 
     P .+= [PLine(wx, L, x) for x in xvals]
@@ -38,12 +36,10 @@ function accumulate_force!(load::PointLoad,
     Vz::Vector{Float64})
 
     R = load.element.R[1:3, 1:3]
-    # Strip units from length (convert Quantity → Float64)
-    L = ustrip(u"m", uconvert(u"m", load.element.length))
+    L = load.element.length
     frac = load.position
 
-    # distributed load magnitudes in LCS (strip units from load.value)
-    value_stripped = [ustrip(u"N", uconvert(u"N", v)) for v in load.value]
+    value_stripped = load.value
     px, py, pz = (R * value_stripped) .* [1, -1, -1]
 
     P .+= [PPoint(px, L, x, frac) for x in xvals]
@@ -69,13 +65,12 @@ function accumulate_force!(load::Asap.GravityLoad,
 
     element = load.element
     R = element.R[1:3, 1:3]
-    # Strip units from length
-    L = ustrip(u"m", uconvert(u"m", element.length))
+    L = element.length
 
-    # Self-weight per unit length: w = ρ * A * g (in N/m)
-    ρ = ustrip(u"kg/m^3", element.section.ρ)
-    A = ustrip(u"m^2", element.section.A)
-    g = ustrip(u"m/s^2", load.factor)
+    # Self-weight per unit length: w = ρ * A * g (N/m)
+    ρ = element.section.ρ
+    A = element.section.A
+    g = load.factor
     w_mag = ρ * A * g  # N/m
 
     # Global load vector: self-weight acts in -Z direction
@@ -115,15 +110,13 @@ function InternalForces(element::Asap.AbstractElement, model::Asap.Model; resolu
     
     #beam information
     dofs = etype2DOF[typeof(element)]
-    # Strip units from length (convert Quantity → Float64)
-    L = ustrip(u"m", uconvert(u"m", element.length))
+    L = element.length
 
     #discretization
     xinc = collect(range(0, L, resolution))
 
     #end node information
-    # Strip units from displacements for matrix multiplication (R and K are Float64)
-    uglobal = [Asap.to_displacement_vec(element.nodeStart.displacement); Asap.to_displacement_vec(element.nodeEnd.displacement)]
+    uglobal = [element.nodeStart.displacement; element.nodeEnd.displacement]
     
     # end forces that are relevant to the given element/release condition
     Flocal = (element.R * element.K * uglobal) .* dofs
@@ -163,15 +156,13 @@ function InternalForces(element::Asap.AbstractElement, loads::AbstractVector{<:A
     
     #beam information
     dofs = etype2DOF[typeof(element)]
-    # Strip units from length (convert Quantity → Float64)
-    L = ustrip(u"m", uconvert(u"m", element.length))
+    L = element.length
 
     #discretization
     xinc = collect(range(0, L, resolution))
 
     #end node information
-    # Strip units from displacements for matrix multiplication (R and K are Float64)
-    uglobal = [Asap.to_displacement_vec(element.nodeStart.displacement); Asap.to_displacement_vec(element.nodeEnd.displacement)]
+    uglobal = [element.nodeStart.displacement; element.nodeEnd.displacement]
     
     # end forces that are relevant to the given element/release condition
     Flocal = (element.R * element.K * uglobal) .* dofs
@@ -236,8 +227,7 @@ function InternalForces(elements::AbstractVector{<:Asap.AbstractElement}, model:
         loadids = element_loads_map[element.elementID]
 
         dofs = etype2DOF[typeof(element)]
-        # Strip units from length (convert Quantity → Float64)
-        L = ustrip(u"m", uconvert(u"m", element.length))
+        L = element.length
 
         #discretization
         xinc = collect(range(0, L, max(resolution, 2)))
@@ -295,17 +285,16 @@ Get the internal forces of all elements in a model.
 
 # Arguments
 - `model::Model` - Structural model whose elements are analyzed
-- `increment` - Distance between sampling points (accepts Unitful length or Real in meters)
+- `increment` - Distance between sampling points (meters)
 """
 function InternalForces(model::Asap.Model, increment)
-    # Accept Unitful or Real - strip to meters internally
-    inc_m = increment isa Unitful.Quantity ? ustrip(u"m", increment) : Float64(increment)
+    inc_m = Float64(increment)
 
     results = Vector{InternalForces}()
     element_loads_map = get_elemental_loads(model)
 
     for element in model.elements
-        L = ustrip(u"m", element.length)
+        L = element.length
         n = max(Int(round(L / inc_m)), 2)
 
         push!(results, InternalForces(element, element_loads_map[element.elementID]; resolution = n))

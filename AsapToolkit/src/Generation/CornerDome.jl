@@ -24,7 +24,7 @@ struct CornerDome <: AbstractGenerator
 end
 
 """
-    CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,interpolator::Interpolations.AbstractExtrapolation, section::Asap.AbstractSection, load = [0.0u"N", 0.0u"N", -10.0u"N"])
+    CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,interpolator::Interpolations.AbstractExtrapolation, section::Asap.AbstractSection, load = [0.0, 0.0, -10.0])
 
 Create a CornerDome.
 
@@ -55,7 +55,7 @@ interpolator = cubic_spline_interpolation((x,y), z)
 Note that the (x,y) domains must be between 0 and 1.
 
 """
-function CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,interpolator::Interpolations.AbstractExtrapolation, section::Asap.AbstractSection, load = [0.0u"N", 0.0u"N", -10.0u"N"])
+function CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,interpolator::Interpolations.AbstractExtrapolation, section::Asap.AbstractSection, load = [0.0, 0.0, -10.0])
 
     @assert bounds(interpolator.itp) == ((0.0, 1.0), (0.0, 1.0)) "Interpolator must be parameterized from 0 → 1 for both x,y coordinates"
 
@@ -63,9 +63,7 @@ function CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,inter
     ymax = dy * ny
 
     #generate nodes for bottom plane
-    bottomnodes = [TrussNode([dx * (i-1) * u"m", 
-        dy * (j-1) * u"m", 
-        interpolator(dx * (i-1) / xmax, dy * (j-1) / ymax) * u"m"], :free, :bottom) for i in 1:nx+1, j in 1:ny+1]
+    bottomnodes = [TrussNode([dx * (i-1), dy * (j-1), interpolator(dx * (i-1) / xmax, dy * (j-1) / ymax)], :free, :bottom) for i in 1:nx+1, j in 1:ny+1]
     for node in bottomnodes
         node.id = :bottom
     end
@@ -74,10 +72,7 @@ function CornerDome(nx::Integer, dx::Real, ny::Integer, dy::Real, dz::Real,inter
     xinit = dx / 2
     yinit = dy / 2
 
-    topnodes = [TrussNode([(dx * (i-1) + xinit) * u"m", 
-        (dy * (j-1) + yinit) * u"m", 
-        (dz + interpolator(dx * (i-1) / xmax, dy * (j-1) /ymax)) * u"m"], 
-        :free) for i in 1:nx, j in 1:ny]
+    topnodes = [TrussNode([dx * (i-1) + xinit, dy * (j-1) + yinit, dz + interpolator(dx * (i-1) / xmax, dy * (j-1) / ymax)], :free) for i in 1:nx, j in 1:ny]
 
     for node in topnodes
         node.id = :top

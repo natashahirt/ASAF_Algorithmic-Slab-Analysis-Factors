@@ -423,7 +423,7 @@ function get_scaled_model(self::SlabAnalysisParams, params::SlabSizingParams, co
     end
 
     for element in self.model.elements
-        release = AsapToolkit.get_release(element)
+        release = AsapToolkit.asap_release_symbol(element)
         sec = _normalize_section_to_inches(element.section)
         new_element = Asap.Element(new_nodes[element.nodeStart.nodeID], new_nodes[element.nodeEnd.nodeID], sec, release=release)
         new_element.id = element.id

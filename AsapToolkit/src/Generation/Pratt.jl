@@ -11,7 +11,7 @@ function Pratt2D(
     nbays::Integer,
     dy::Real,
     section::Asap.AbstractSection;
-    load = [0.0u"N", -1.0u"N", 0.0u"N"],
+    load = [0.0, -1.0, 0.0],
     up = true)
 
     #make sure nbays is even
@@ -21,7 +21,7 @@ function Pratt2D(
     xrange = range(0, L, nbays+1)
 
     #make main nodes
-    main_chord_nodes = [TrussNode([x * u"m", 0.0u"m", 0.0u"m"], :free, :main) for x in xrange]
+    main_chord_nodes = [TrussNode([x, 0.0, 0.0], :free, :main) for x in xrange]
     n_main = nbays + 1
     
     #make supports
@@ -33,7 +33,7 @@ function Pratt2D(
 
     #make offset nodes
     offset = up ? dy : -dy
-    offset_chord_nodes = [TrussNode([x * u"m", offset * u"m", 0.0u"m"], :free, :offset) for x in xrange[2:end-1]]
+    offset_chord_nodes = [TrussNode([x, offset, 0.0], :free, :offset) for x in xrange[2:end-1]]
     n_offset = length(offset_chord_nodes)
 
     #make main chord elements
