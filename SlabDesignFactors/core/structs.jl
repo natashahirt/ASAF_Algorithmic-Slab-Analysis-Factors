@@ -377,4 +377,14 @@ Sizer exit state (from `optimal_beamsizer` outer staged-deflection loop):
     composite_action::Bool                     = false
     staged_converged::Bool                     = true
     staged_n_violations::Int                   = 0
+
+    # --- Run diagnostics (for CSV reporting / filtering) ---
+    geometry_file::String                      = ""
+    result_ok::Bool                            = false
+    strength_ok::Bool                          = false
+    serviceability_ok::Bool                    = false
+    column_ok::Bool                            = false
+    solver_status::String                      = ""
+    diagnostic_flags::String                   = ""
+    diagnostic_messages::String                = ""
 end

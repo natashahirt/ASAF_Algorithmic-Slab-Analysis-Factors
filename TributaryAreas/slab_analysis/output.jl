@@ -212,6 +212,14 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         max_util_M=Float64[],
         max_util_V=Float64[],
         max_col_util=Float64[],
+        geometry_file=String[],
+        result_ok=Bool[],
+        strength_ok=Bool[],
+        serviceability_ok=Bool[],
+        column_ok=Bool[],
+        solver_status=String[],
+        diagnostic_flags=String[],
+        diagnostic_messages=String[],
     )
 
     empty_arr = "Any[]"
@@ -231,7 +239,9 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                        empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
                        empty_arr, empty_arr,
                        false, true, 0, 0, 0, empty_arr, empty_arr,
-                       0.0, 0.0, true, 0.0, 0.0, 0.0])
+                       0.0, 0.0, true, 0.0, 0.0, 0.0,
+                       results.geometry_file, false, false, false, false,
+                       "NO_GEOMETRY", "no_slab_area;result_not_ok", "No slab area; result is not design-feasible."])
             continue
         end
 
@@ -263,7 +273,10 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                    results.n_L360_fail, results.n_L240_fail,
                    _ints(results.i_L360_fail), _ints(results.i_L240_fail),
                    max_δ_tot_mm, results.max_bay_span, results.global_δ_ok,
-                   results.max_util_M, results.max_util_V, results.max_col_util])
+                   results.max_util_M, results.max_util_V, results.max_col_util,
+                   results.geometry_file, results.result_ok, results.strength_ok,
+                   results.serviceability_ok, results.column_ok, results.solver_status,
+                   results.diagnostic_flags, results.diagnostic_messages])
 
         if verbose
             print_verbose_results(results)
@@ -310,6 +323,10 @@ function print_verbose_results(results::SlabOptimResults)
         if results.composite_action
             println("  Staged sizer: converged=$(results.staged_converged), " *
                     "n_violations=$(results.staged_n_violations)")
+        end
+        println("  Status: solver=$(results.solver_status), result_ok=$(results.result_ok)")
+        if results.diagnostic_flags != "none"
+            println("  Diagnostics: $(results.diagnostic_flags)")
         end
         println()
     end
