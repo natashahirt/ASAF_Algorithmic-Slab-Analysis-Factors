@@ -186,6 +186,9 @@ mutable struct SlabSizingParams
 
     # material scenario (used by load generation + postprocessing for density/ECC)
     concrete_material::ConcreteMaterial
+
+    # factored beam self-weight as `LineLoad`s on FE model (strength / columns); empty until sizing
+    beam_sw_line_loads::Vector{Asap.AbstractLoad}
     
     function SlabSizingParams(;
         model::Union{Asap.Model, Nothing}=nothing,
@@ -259,6 +262,8 @@ mutable struct SlabSizingParams
 
         # material scenario
         concrete_material::ConcreteMaterial=DEFAULT_CONCRETE,
+
+        beam_sw_line_loads::Vector{Asap.AbstractLoad}=Asap.AbstractLoad[],
     )
         @assert (beam_sizer in [:discrete, :continuous]) "Invalid beam sizing method."
         @assert deflection_reduction_factor > 0 "deflection_reduction_factor must be > 0."
@@ -273,7 +278,7 @@ mutable struct SlabSizingParams
             x_maxs, load_dictionary, load_df, minimizers, minimums, ids, collinear_minimizers, collinear_ids,
             collinear_minimums, collinear_groups, composite_action, E_c, slab_depth_in, drf, i_perimeter,
             min_Ix_comp, min_Ix_bare, max_bay_span, mip_result,
-            staged_converged, staged_n_violations, verbose, concrete_material)
+            staged_converged, staged_n_violations, verbose, concrete_material, beam_sw_line_loads)
     end
 end
 
@@ -391,6 +396,9 @@ Sizer exit state (from `optimal_beamsizer` outer staged-deflection loop):
     composite_action::Bool                     = false
     staged_converged::Bool                     = true
     staged_n_violations::Int                   = 0
+
+    # --- Config versioning (for resume-logic staleness detection) ---
+    config_hash::String                        = ""
 
     # --- Run diagnostics (for CSV reporting / filtering) ---
     geometry_file::String                      = ""

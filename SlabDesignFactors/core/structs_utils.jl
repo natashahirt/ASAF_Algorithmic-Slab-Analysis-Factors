@@ -93,6 +93,7 @@ function reset_SlabSizingParams(self::SlabSizingParams)
         mip_result=self.mip_result,
         staged_converged=self.staged_converged,
         staged_n_violations=self.staged_n_violations,
-        verbose=self.verbose
+        verbose=self.verbose,
+        beam_sw_line_loads=Asap.AbstractLoad[],
     )
 end

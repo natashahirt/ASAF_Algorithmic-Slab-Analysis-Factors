@@ -38,9 +38,11 @@ function parse_params_file(params_file::String)::Vector{Tuple{String, String}}
 end
 
 """
-    config_key(name, slab_sizer, max_depth, slab_type, vector_1d)
+    config_key(name, slab_sizer, max_depth, slab_type, vector_1d, collinear, config_hash)
 
-Canonical config identity used for resume logic.
+Canonical config identity used for resume logic.  The last element is the
+`FULL_SWEEP_CONFIG_HASH` so that stale results produced by an older code
+version or different parameter set are automatically re-run.
 """
 function config_key(
     name::String,
@@ -48,7 +50,9 @@ function config_key(
     max_depth::Real,
     slab_type::Symbol,
     vector_1d::Vector{Float64},
-)::NTuple{6, Any}
+    collinear::Bool,
+    config_hash::String=SlabDesignFactors.FULL_SWEEP_CONFIG_HASH,
+)::NTuple{8, Any}
     return (
         name,
         String(slab_sizer),
@@ -56,6 +60,8 @@ function config_key(
         String(slab_type),
         Float64(vector_1d[1]),
         Float64(vector_1d[2]),
+        collinear,
+        config_hash,
     )
 end
 
@@ -64,9 +70,13 @@ end
 
 Load already-completed config keys from an existing shard CSV.
 If the file is missing or unreadable, returns an empty set.
+
+When the CSV lacks a `config_hash` column (legacy data), the row is
+treated as hash-less and will never match the current hash, forcing a
+re-run — which is exactly the desired behaviour after a code change.
 """
-function done_set_for_file(results_file::String)::Set{NTuple{6, Any}}
-    out = Set{NTuple{6, Any}}()
+function done_set_for_file(results_file::String)::Set{NTuple{8, Any}}
+    out = Set{NTuple{8, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -77,7 +87,13 @@ function done_set_for_file(results_file::String)::Set{NTuple{6, Any}}
             @warn "Resume CSV is missing expected columns; continuing with empty done-set" file=results_file
             return out
         end
+        if !("collinear" in names(df))
+            @warn "Resume CSV lacks collinear column; clearing done-set so both collinearity sweeps re-run" file=results_file
+            return out
+        end
+        has_hash = "config_hash" in names(df)
         for r in eachrow(df)
+            row_hash = has_hash ? String(r.config_hash) : ""
             push!(out, (
                 String(r.name),
                 String(r.slab_sizer),
@@ -85,6 +101,8 @@ function done_set_for_file(results_file::String)::Set{NTuple{6, Any}}
                 String(r.slab_type),
                 Float64(r.vector_1d_x),
                 Float64(r.vector_1d_y),
+                Bool(r.collinear),
+                row_hash,
             ))
         end
     catch e
@@ -105,6 +123,7 @@ function build_all_configs(params_entries::Vector{Tuple{String, String}})
     ]
     max_depths = [25, 40]
     slab_sizers = [:cellular, :uniform]
+    collinears = [true, false]
 
     configs = NamedTuple[]
     for (json_path, results_name) in params_entries
@@ -114,18 +133,21 @@ function build_all_configs(params_entries::Vector{Tuple{String, String}})
             name = replace(sub_path, ".json" => "")
             for max_depth in max_depths
                 for slab_sizer in slab_sizers
-                    for (i, slab_type) in enumerate(slab_types)
-                        vector_1d = vector_1ds[i]
-                        push!(configs, (
-                            json_path=json_path,
-                            results_name=results_name,
-                            path=path,
-                            name=name,
-                            slab_type=slab_type,
-                            vector_1d=vector_1d,
-                            slab_sizer=slab_sizer,
-                            max_depth=max_depth,
-                        ))
+                    for collinear in collinears
+                        for (i, slab_type) in enumerate(slab_types)
+                            vector_1d = vector_1ds[i]
+                            push!(configs, (
+                                json_path=json_path,
+                                results_name=results_name,
+                                path=path,
+                                name=name,
+                                slab_type=slab_type,
+                                vector_1d=vector_1d,
+                                slab_sizer=slab_sizer,
+                                max_depth=max_depth,
+                                collinear=collinear,
+                            ))
+                        end
                     end
                 end
             end
@@ -179,14 +201,18 @@ function run_one_config(cfg)::Union{Vector{SlabDesignFactors.SlabOptimResults}, 
             beam_units=:in,
             serviceability_lim=SlabDesignFactors.FULL_SWEEP_SERVICEABILITY_LIM,
             minimum_continuous=true,
-            collinear=SlabDesignFactors.FULL_SWEEP_COLLINEAR,
+            collinear=cfg.collinear,
             composite_action=SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION,
             deflection_reduction_factor=SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR,
         )
 
-        return collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))
+        results = collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))
+        for r in results
+            r.config_hash = SlabDesignFactors.FULL_SWEEP_CONFIG_HASH
+        end
+        return results
     catch e
-        @warn "Config failed; skipping" name=cfg.name slab_type=cfg.slab_type slab_sizer=cfg.slab_sizer max_depth=cfg.max_depth exception=e
+        @warn "Config failed; skipping" name=cfg.name slab_type=cfg.slab_type slab_sizer=cfg.slab_sizer max_depth=cfg.max_depth collinear=cfg.collinear exception=e
         return nothing
     end
 end
@@ -226,7 +252,7 @@ function run_shard(
     shard_configs = [cfg for (i, cfg) in enumerate(all_configs) if mod(i - 1, shard_count) == shard_id - 1]
 
     # Resume state is isolated per {results_name, shard}.
-    done_by_result = Dict{String, Set{NTuple{6, Any}}}()
+    done_by_result = Dict{String, Set{NTuple{8, Any}}}()
     for (_, results_name) in params_entries
         shard_results_file = joinpath(shard_dir, "$(results_name).csv")
         done_by_result[results_name] = done_set_for_file(shard_results_file)
@@ -234,7 +260,7 @@ function run_shard(
 
     pending = NamedTuple[]
     for cfg in shard_configs
-        key = config_key(cfg.name, cfg.slab_sizer, cfg.max_depth, cfg.slab_type, cfg.vector_1d)
+        key = config_key(cfg.name, cfg.slab_sizer, cfg.max_depth, cfg.slab_type, cfg.vector_1d, cfg.collinear)
         if !(key in done_by_result[cfg.results_name])
             push!(pending, cfg)
         end
@@ -260,7 +286,7 @@ function run_shard(
 
     Threads.@threads for idx in eachindex(pending)
         cfg = pending[idx]
-        println("[Shard $(shard_id)] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) $(cfg.slab_type) $(cfg.vector_1d) $(cfg.slab_sizer) $(cfg.max_depth)in")
+        println("[Shard $(shard_id)] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) $(cfg.slab_type) $(cfg.vector_1d) $(cfg.slab_sizer) $(cfg.max_depth)in collinear=$(cfg.collinear)")
 
         iteration_result = run_one_config(cfg)
         if iteration_result === nothing
@@ -270,7 +296,7 @@ function run_shard(
 
         lock(append_lock) do
             SlabDesignFactors.append_results_to_csv(shard_dir * "/", cfg.results_name, iteration_result)
-            key = config_key(cfg.name, cfg.slab_sizer, cfg.max_depth, cfg.slab_type, cfg.vector_1d)
+            key = config_key(cfg.name, cfg.slab_sizer, cfg.max_depth, cfg.slab_type, cfg.vector_1d, cfg.collinear)
             push!(done_by_result[cfg.results_name], key)
         end
 

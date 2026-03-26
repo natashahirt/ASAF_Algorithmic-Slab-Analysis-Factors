@@ -200,6 +200,11 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
         end
     end
 
+    # Factored beam self-weight on the global FE model for strength demands and column axial
+    if !isempty(params.minimizers)
+        finalize_beam_selfweight_factored_demands!(params)
+    end
+
     # Record convergence outcome on sizing params for downstream filtering
     params.staged_converged    = !has_staged || final_n_viol == 0
     params.staged_n_violations = final_n_viol
@@ -326,10 +331,8 @@ function _verify_staged_deflection(params::SlabSizingParams)
         end
     end
 
-    # Restore factored loads for subsequent sizing
-    update_load_values!(params.model, params, factored=true)
-    params.load_dictionary = get_load_dictionary_by_id(params.model)
-    Asap.solve!(params.model, reprocess=true)
+    # Restore factored loads (including beam self-weight) for subsequent sizing
+    refresh_factored_loads_with_beam_sw!(params)
 
     # Check L/360 (live) and L/240 (total) limits.
     # For violating beams, compute the composite Ix that would satisfy each

@@ -157,6 +157,37 @@ function sync_csv_schema!(existing_df::DataFrame, new_df::DataFrame)
 end
 
 """
+    widen_dataframe_columns_for_csv_merge!(existing_df, new_df)
+
+`CSV.read` can materialize all-missing columns as `SentinelArrays.MissingVector`, which
+does not support `setindex!` when merging a new row. Rebuild those columns as
+`Vector{Union{Missing,T}}` using the element type from `new_df`.
+"""
+function widen_dataframe_columns_for_csv_merge!(existing_df::DataFrame, new_df::DataFrame)
+    for c in names(new_df)
+        c in names(existing_df) || continue
+        old = existing_df[!, c]
+        Tnm = Base.nonmissingtype(eltype(new_df[!, c]))
+        (Tnm === Any || Tnm === Union{}) && continue
+        W = Union{Missing,Tnm}
+        stub = eltype(old) === Missing
+        stub |= occursin("MissingVector", string(typeof(old)))
+        if !stub && nrow(existing_df) > 0 && all(ismissing, old)
+            stub = true
+        end
+        stub || continue
+        n = nrow(existing_df)
+        newcol = Vector{W}(missing, n)
+        for i in 1:n
+            v = old[i]
+            newcol[i] = ismissing(v) ? missing : convert(Tnm, v)
+        end
+        existing_df[!, c] = newcol
+    end
+    nothing
+end
+
+"""
     create_results_dataframe(results_list, verbose)
 
 Build one row per `SlabOptimResults` for CSV export. Includes per-beam staged
@@ -165,6 +196,11 @@ sanity, strength utilization, and `optimal_beamsizer` staged-loop status — sam
 information as `print_mass_and_carbon_summary` / the per-beam table. The canonical
 pipeline and assertions live in `SlabDesignFactors/test/run.jl` → `test/runtests.jl`
 (integration tests on real topologies).
+
+When `result_ok` is false (strength, serviceability, or column checks failed), design
+quantities (masses, sections, utilizations, deflection strings) are written as zeros and
+empty arrays so downstream CSV consumers are not misled; identity fields, `solver_status`,
+and diagnostics still reflect the run.
 """
 function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbose::Bool)
     df = DataFrame(
@@ -220,6 +256,7 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         solver_status=String[],
         diagnostic_flags=String[],
         diagnostic_messages=String[],
+        config_hash=String[],
     )
 
     empty_arr = "Any[]"
@@ -241,7 +278,31 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                        false, true, 0, 0, 0, empty_arr, empty_arr,
                        0.0, 0.0, true, 0.0, 0.0, 0.0,
                        results.geometry_file, false, false, false, false,
-                       "NO_GEOMETRY", "no_slab_area;result_not_ok", "No slab area; result is not design-feasible."])
+                       "NO_GEOMETRY", "no_slab_area;result_not_ok", "No slab area; result is not design-feasible.",
+                       results.config_hash])
+            continue
+        end
+
+        # Design infeasible: keep run metadata and diagnostics; omit quantities that could
+        # be mistaken for an acceptable design (same empty pattern as zero-area rows).
+        if !results.result_ok
+            push!(df, [name, area, 0., 0., 0., 0., 0., results.max_depth,
+                       String(results.slab_type), String(results.slab_sizer), String(results.beam_sizer),
+                       results.nlp_solver, results.deflection_limit,
+                       results.collinear, results.vector_1d[1], results.vector_1d[2],
+                       empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
+                       empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
+                       empty_arr, empty_arr,
+                       results.composite_action, results.staged_converged, results.staged_n_violations,
+                       0, 0, empty_arr, empty_arr,
+                       0.0, results.max_bay_span, false, 0.0, 0.0, 0.0,
+                       results.geometry_file, results.result_ok, results.strength_ok,
+                       results.serviceability_ok, results.column_ok, results.solver_status,
+                       results.diagnostic_flags, results.diagnostic_messages,
+                       results.config_hash])
+            if verbose
+                print_verbose_results(results)
+            end
             continue
         end
 
@@ -276,7 +337,8 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                    results.max_util_M, results.max_util_V, results.max_col_util,
                    results.geometry_file, results.result_ok, results.strength_ok,
                    results.serviceability_ok, results.column_ok, results.solver_status,
-                   results.diagnostic_flags, results.diagnostic_messages])
+                   results.diagnostic_flags, results.diagnostic_messages,
+                   results.config_hash])
 
         if verbose
             print_verbose_results(results)
@@ -302,6 +364,14 @@ function print_verbose_results(results::SlabOptimResults)
 
     if results.area == 0.
         println("  Slab span too large.\n")
+    elseif !results.result_ok
+        println("  Area: $(round(results.area, digits=2)) m² — design not feasible (CSV omits design quantities).")
+        println("  Status: solver=$(results.solver_status), result_ok=$(results.result_ok), " *
+                "strength_ok=$(results.strength_ok), serviceability_ok=$(results.serviceability_ok), column_ok=$(results.column_ok)")
+        if results.diagnostic_flags != "none"
+            println("  Diagnostics: $(results.diagnostic_flags)")
+        end
+        println()
     else
         println("  Beam steel normalized mass: $(round(results.norm_mass_beams, digits=2)) kg/m²")
         println("  Column steel normalized mass: $(round(results.norm_mass_columns, digits=2)) kg/m²")
@@ -358,18 +428,14 @@ function save_dataframe_to_csv(df::DataFrame, results_list::Vector{SlabOptimResu
 
     println("Saving results to $folder")
 
-    if !isdir(folder)
-        mkdir(folder)
-    end
+    mkpath(folder)
 
     CSV.write(filename, df)
 end
 
 function append_results_to_csv(folder::String, filename::String, results_list::Vector{SlabOptimResults}; unique_sections::Int=0)
     # Create directory if it doesn't exist
-    if !isdir(folder)
-        mkdir(folder)
-    end
+    mkpath(folder)
     
     path = folder * filename * ".csv"
     new_df = create_results_dataframe(results_list, true)
@@ -401,6 +467,7 @@ function append_results_to_csv(folder::String, filename::String, results_list::V
             end
 
             sync_csv_schema!(existing_df, new_df)
+            widen_dataframe_columns_for_csv_merge!(existing_df, new_df)
 
             # For each row in new results
             for i in 1:nrow(new_df)
@@ -414,7 +481,8 @@ function append_results_to_csv(folder::String, filename::String, results_list::V
                     (existing_df.vector_1d_x .== new_df.vector_1d_x[i]) .&
                     (existing_df.vector_1d_y .== new_df.vector_1d_y[i]) .&
                     (existing_df.max_depth .== new_df.max_depth[i]) .&
-                    (existing_df.unique_sections .== new_df.unique_sections[i])
+                    (existing_df.unique_sections .== new_df.unique_sections[i]) .&
+                    (String.(coalesce.(existing_df.config_hash, "")) .== String(new_df.config_hash[i]))
                 )
                 if length(matching_rows) == 1
                     # Convert row-by-row to ensure type compatibility

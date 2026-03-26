@@ -47,6 +47,15 @@ const DEFAULT_COMPOSITE   = SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION
 const DEFAULT_COLLINEAR   = SlabDesignFactors.FULL_SWEEP_COLLINEAR
 const DEFAULT_DRF         = SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR
 
+"""Resume key for topology-based studies (loads/factors match `FULL_SWEEP_*`)."""
+const EXPERIMENTS_TOPOLOGY_CONFIG_HASH = SlabDesignFactors.FULL_SWEEP_CONFIG_HASH
+
+"""Resume key for validation / constrained-inventory (building loads + composite + collinear)."""
+const BUILDING_STUDIES_CONFIG_HASH = string(hash((
+    SlabDesignFactors.FULL_SWEEP_CONFIG_HASH,
+    "office60_school50_wh250_sdl20_slab45_façade500plf_composite_collinear_v1",
+)), base=16)
+
 # Columns added to custom study CSVs (strip / NLP / material) for parity with `create_results_dataframe`.
 const STAGING_SUMMARY_COLS = [
     :beam_sizer, :nlp_solver, :deflection_limit, :composite_action, :staged_converged,
@@ -122,8 +131,12 @@ function ensure_results_columns!(df::DataFrame, colnames::Vector{Symbol})
     nothing
 end
 
-function done_set_max_depth(results_file::String)::Set{Tuple{String, String, Float64, String, Float64, Float64}}
-    out = Set{Tuple{String, String, Float64, String, Float64, Float64}}()
+function _row_config_hash(df, r)::String
+    return "config_hash" in names(df) ? String(coalesce(r.config_hash, "")) : ""
+end
+
+function done_set_max_depth(results_file::String)::Set{NTuple{7, Any}}
+    out = Set{NTuple{7, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -137,6 +150,7 @@ function done_set_max_depth(results_file::String)::Set{Tuple{String, String, Flo
                 String(r.slab_type),
                 Float64(r.vector_1d_x),
                 Float64(r.vector_1d_y),
+                _row_config_hash(df, r),
             ))
         end
     catch e
@@ -145,8 +159,8 @@ function done_set_max_depth(results_file::String)::Set{Tuple{String, String, Flo
     return out
 end
 
-function done_set_constrained(results_file::String)::Set{Tuple{String, Int, Int}}
-    out = Set{Tuple{String, Int, Int}}()
+function done_set_constrained(results_file::String)::Set{NTuple{4, Any}}
+    out = Set{NTuple{4, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -156,7 +170,7 @@ function done_set_constrained(results_file::String)::Set{Tuple{String, Int, Int}
             return out
         end
         for r in eachrow(df)
-            push!(out, (String(r.name), Int(round(r.max_depth)), Int(round(r.unique_sections))))
+            push!(out, (String(r.name), Int(round(r.max_depth)), Int(round(r.unique_sections)), _row_config_hash(df, r)))
         end
     catch e
         @warn "Failed to read constrained inventory done-set; rerunning from scratch for this study" file=results_file exception=e
@@ -164,8 +178,8 @@ function done_set_constrained(results_file::String)::Set{Tuple{String, Int, Int}
     return out
 end
 
-function done_set_strip_resolution(results_file::String)::Set{Tuple{String, Float64}}
-    out = Set{Tuple{String, Float64}}()
+function done_set_strip_resolution(results_file::String)::Set{NTuple{4, Any}}
+    out = Set{NTuple{4, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -174,8 +188,11 @@ function done_set_strip_resolution(results_file::String)::Set{Tuple{String, Floa
         if !all(c -> c in names(df), [:geometry, :spacing])
             return out
         end
+        if !("slab_sizer" in names(df))
+            return out
+        end
         for r in eachrow(df)
-            push!(out, (String(r.geometry), Float64(r.spacing)))
+            push!(out, (String(r.geometry), Float64(r.spacing), String(r.slab_sizer), _row_config_hash(df, r)))
         end
     catch e
         @warn "Failed to read strip-resolution done-set; rerunning from scratch for this study" file=results_file exception=e
@@ -183,8 +200,8 @@ function done_set_strip_resolution(results_file::String)::Set{Tuple{String, Floa
     return out
 end
 
-function done_set_nlp_solver(results_file::String)::Set{Tuple{String, String, String, String, Float64}}
-    out = Set{Tuple{String, String, String, String, Float64}}()
+function done_set_nlp_solver(results_file::String)::Set{NTuple{6, Any}}
+    out = Set{NTuple{6, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -201,6 +218,7 @@ function done_set_nlp_solver(results_file::String)::Set{Tuple{String, String, St
                 String(r.slab_type),
                 String(r.slab_sizer),
                 Float64(r.max_depth),
+                _row_config_hash(df, r),
             ))
         end
     catch e
@@ -231,7 +249,7 @@ function run_max_depths(results_path::String; json_path::String=DEFAULT_TOPOLOGY
             for slab_sizer in slab_sizers
                 for (i, slab_type) in enumerate(slab_types)
                     vector_1d = vector_1ds[i]
-                    key = (name, String(slab_sizer), Float64(max_depth), String(slab_type), Float64(vector_1d[1]), Float64(vector_1d[2]))
+                    key = (name, String(slab_sizer), Float64(max_depth), String(slab_type), Float64(vector_1d[1]), Float64(vector_1d[2]), EXPERIMENTS_TOPOLOGY_CONFIG_HASH)
                     if key in done
                         continue
                     end
@@ -288,6 +306,9 @@ function run_max_depths(results_path::String; json_path::String=DEFAULT_TOPOLOGY
             )
 
             iteration_result = collect(SlabDesignFactors.iterate_discrete_continuous(slab_params, beam_sizing_params))
+            for r in iteration_result
+                r.config_hash = EXPERIMENTS_TOPOLOGY_CONFIG_HASH
+            end
             lock(append_lock) do
                 SlabDesignFactors.append_results_to_csv(results_path * "/", results_name, iteration_result)
             end
@@ -312,6 +333,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
         DataFrame(
             geometry=String[],
             spacing=Float64[],
+            slab_sizer=String[],
             n_cells=Int[],
             n_beams=Int[],
             n_strips=Int[],
@@ -325,21 +347,26 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
             slab_area_m2=Float64[],
             mean_slab_depth_m=Float64[],
             elapsed_s=Float64[],
+            config_hash=String[],
         )
     end
     ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
+    ensure_results_columns!(out_df, [:slab_sizer, :config_hash])
 
+    slab_sizers_strip = [:uniform, :cellular]
     configs = NamedTuple[]
     sub_paths = sort(filter(x -> endswith(x, ".json"), readdir(json_path)))
     for sub_path in sub_paths
         name = replace(sub_path, ".json" => "")
         path = joinpath(json_path, sub_path)
         for spacing in spacings
-            key = (name, spacing)
-            if key in done
-                continue
+            for slab_sz in slab_sizers_strip
+                key = (name, spacing, String(slab_sz), EXPERIMENTS_TOPOLOGY_CONFIG_HASH)
+                if key in done
+                    continue
+                end
+                push!(configs, (name=name, path=path, spacing=spacing, slab_sizer=slab_sz))
             end
-            push!(configs, (name=name, path=path, spacing=spacing))
         end
     end
 
@@ -350,7 +377,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
     Threads.@threads for i in eachindex(configs)
         cfg = configs[i]
         t0 = time()
-        println("[strip_resolution] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) spacing=$(cfg.spacing)")
+        println("[strip_resolution] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) spacing=$(cfg.spacing) slab_sizer=$(cfg.slab_sizer)")
 
         try
             geometry_dict = read_geometry_from_json(cfg.path)
@@ -360,7 +387,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                 slab_name=cfg.name,
                 slab_type=:isotropic,
                 vector_1d=[1.0, 0.0],
-                slab_sizer=:uniform,
+                slab_sizer=cfg.slab_sizer,
                 spacing=cfg.spacing,
                 plot_analysis=false,
                 fix_param=true,
@@ -377,11 +404,11 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                 max_depth=DEFAULT_MAX_DEPTH,
                 beam_units=:in,
                 serviceability_lim=DEFAULT_SERV_LIM,
-                collinear=true,
+                collinear=DEFAULT_COLLINEAR,
                 minimum_continuous=true,
                 n_max_sections=0,
-                composite_action=true,
-                deflection_reduction_factor=1.0,
+                composite_action=DEFAULT_COMPOSITE,
+                deflection_reduction_factor=DEFAULT_DRF,
             )
 
             slab_params = SlabDesignFactors.analyze_slab(slab_params)
@@ -395,48 +422,73 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
             dt = time() - t0
 
             max_staged_mm = round(results.max_δ_total * 25.4, digits=3)
-            row = (
-                cfg.name,
-                cfg.spacing,
-                0, # kept for compatibility with plotting scripts; this runner does not precompute cells.
-                n_beams,
-                n_strips,
-                results.mass_beams,
-                results.norm_mass_beams,
-                results.embodied_carbon_beams,
-                results.embodied_carbon_slab,
-                results.embodied_carbon_rebar,
-                results.embodied_carbon_beams + results.embodied_carbon_slab + results.embodied_carbon_rebar,
-                max_δ,
-                results.area,
-                mean_depth,
-                dt,
-                String(results.beam_sizer),
-                results.nlp_solver,
-                results.deflection_limit,
-                results.composite_action,
-                results.staged_converged,
-                results.staged_n_violations,
-                results.n_L360_fail,
-                results.n_L240_fail,
-                results.global_δ_ok,
-                max_staged_mm,
-            )
-
             lock(table_lock) do
-                push!(out_df, row)
+                push!(out_df, (
+                    geometry=cfg.name,
+                    spacing=cfg.spacing,
+                    slab_sizer=String(cfg.slab_sizer),
+                    n_cells=0, # kept for compatibility with plotting scripts; this runner does not precompute cells.
+                    n_beams=n_beams,
+                    n_strips=n_strips,
+                    mass_beams_kg=results.mass_beams,
+                    norm_mass_beams=results.norm_mass_beams,
+                    ec_steel=results.embodied_carbon_beams,
+                    ec_slab=results.embodied_carbon_slab,
+                    ec_rebar=results.embodied_carbon_rebar,
+                    ec_total=results.embodied_carbon_beams + results.embodied_carbon_slab + results.embodied_carbon_rebar,
+                    max_deflection_in=max_δ,
+                    slab_area_m2=results.area,
+                    mean_slab_depth_m=mean_depth,
+                    elapsed_s=dt,
+                    config_hash=EXPERIMENTS_TOPOLOGY_CONFIG_HASH,
+                    beam_sizer=String(results.beam_sizer),
+                    nlp_solver=results.nlp_solver,
+                    deflection_limit=results.deflection_limit,
+                    composite_action=results.composite_action,
+                    staged_converged=results.staged_converged,
+                    staged_n_violations=results.staged_n_violations,
+                    n_L360_fail=results.n_L360_fail,
+                    n_L240_fail=results.n_L240_fail,
+                    global_δ_ok=results.global_δ_ok,
+                    max_staged_δ_total_mm=max_staged_mm,
+                ))
                 write_table_atomically(results_file, out_df)
             end
         catch e
             dt = time() - t0
             lock(table_lock) do
                 push!(out_df, (
-                    cfg.name, cfg.spacing, 0, 0, 0, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, dt,
-                    missing, missing, missing, missing, missing, missing, missing, missing, missing, missing,
+                    geometry=cfg.name,
+                    spacing=cfg.spacing,
+                    slab_sizer=String(cfg.slab_sizer),
+                    n_cells=0,
+                    n_beams=0,
+                    n_strips=0,
+                    mass_beams_kg=NaN,
+                    norm_mass_beams=NaN,
+                    ec_steel=NaN,
+                    ec_slab=NaN,
+                    ec_rebar=NaN,
+                    ec_total=NaN,
+                    max_deflection_in=NaN,
+                    slab_area_m2=NaN,
+                    mean_slab_depth_m=NaN,
+                    elapsed_s=dt,
+                    config_hash=EXPERIMENTS_TOPOLOGY_CONFIG_HASH,
+                    beam_sizer=missing,
+                    nlp_solver=missing,
+                    deflection_limit=missing,
+                    composite_action=missing,
+                    staged_converged=missing,
+                    staged_n_violations=missing,
+                    n_L360_fail=missing,
+                    n_L240_fail=missing,
+                    global_δ_ok=missing,
+                    max_staged_δ_total_mm=missing,
                 ))
                 write_table_atomically(results_file, out_df)
             end
-            @warn "Failed strip-resolution config" name=cfg.name spacing=cfg.spacing exception=e
+            @warn "Failed strip-resolution config" name=cfg.name spacing=cfg.spacing slab_sizer=cfg.slab_sizer exception=e
         end
     end
 end
@@ -460,7 +512,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
     for name in names
         path = joinpath(json_path, name * ".json")
         for n_sections in 0:30
-            key = (name, 40, n_sections)
+            key = (name, 40, n_sections, BUILDING_STUDIES_CONFIG_HASH)
             if !(key in done_resized)
                 push!(resized_configs, (name=name, path=path, max_depth=40, n_max_sections=n_sections))
             end
@@ -476,7 +528,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
     for name in names
         path = joinpath(json_path, name * ".json")
         for depth in max_depth_values
-            key = (name, depth, depth)
+            key = (name, depth, depth, BUILDING_STUDIES_CONFIG_HASH)
             if !(key in done_max_depth)
                 push!(max_depth_configs, (name=name, path=path, max_depth=depth, n_max_sections=0))
             end
@@ -517,9 +569,11 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
             max_depth=cfg.max_depth,
             beam_units=:in,
             serviceability_lim=360,
-            collinear=false,
+            collinear=true,
             minimum_continuous=true,
             n_max_sections=cfg.n_max_sections,
+            composite_action=DEFAULT_COMPOSITE,
+            deflection_reduction_factor=DEFAULT_DRF,
         )
 
         slab_params = SlabDesignFactors.analyze_slab(slab_params)
@@ -528,6 +582,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
             return
         end
         slab_results = SlabDesignFactors.postprocess_slab(slab_params, beam_sizing_params)
+        slab_results.config_hash = BUILDING_STUDIES_CONFIG_HASH
         lock(append_lock) do
             SlabDesignFactors.append_results_to_csv(results_path * "/", results_name, [slab_results], unique_sections=unique_sections_value)
         end
@@ -564,9 +619,9 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
     # Keep physics/config fixed so solver differences are isolated.
     slab_type = :isotropic
     vector_1d = [1.0, 0.0]
-    slab_sizer = :uniform
     spacing = DEFAULT_SPACING
     max_depth = 40.0
+    slab_sizers_nlp = [:uniform, :cellular]
 
     out_df = if isfile(results_file)
         CSV.read(results_file, DataFrame)
@@ -587,21 +642,25 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
             ec_total=Float64[],
             max_deflection_in=Float64[],
             error_message=String[],
+            config_hash=String[],
         )
     end
     ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
+    ensure_results_columns!(out_df, [:config_hash])
 
     configs = NamedTuple[]
     sub_paths = sort(filter(x -> endswith(x, ".json"), readdir(json_path)))
     for sub_path in sub_paths
         name = replace(sub_path, ".json" => "")
         path = joinpath(json_path, sub_path)
-        for solver in NLP_SOLVER_LIST
-            key = (name, String(solver), String(slab_type), String(slab_sizer), max_depth)
-            if key in done
-                continue
+        for slab_sz in slab_sizers_nlp
+            for solver in NLP_SOLVER_LIST
+                key = (name, String(solver), String(slab_type), String(slab_sz), max_depth, EXPERIMENTS_TOPOLOGY_CONFIG_HASH)
+                if key in done
+                    continue
+                end
+                push!(configs, (name=name, path=path, solver=solver, slab_sz=slab_sz))
             end
-            push!(configs, (name=name, path=path, solver=solver))
         end
     end
 
@@ -612,7 +671,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
     Threads.@threads for i in eachindex(configs)
         cfg = configs[i]
         t0 = time()
-        println("[nlp_solver_comparison] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) solver=$(cfg.solver)")
+        println("[nlp_solver_comparison] ($(Threads.threadid())/$(Threads.nthreads())) $(cfg.name) solver=$(cfg.solver) slab_sizer=$(cfg.slab_sz)")
 
         success = false
         warm_start_used = false
@@ -644,14 +703,14 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 slab_name=cfg.name,
                 slab_type=slab_type,
                 vector_1d=vector_1d,
-                slab_sizer=slab_sizer,
+                slab_sizer=cfg.slab_sz,
                 spacing=spacing,
                 plot_analysis=false,
                 fix_param=true,
                 slab_units=:m,
             )
 
-            beam_sizer = cfg.solver == :MIP ? :discrete : :continuous
+            beam_sizer_mode = cfg.solver == :MIP ? :discrete : :continuous
             nlp_solver = cfg.solver == :MIP ? :Ipopt : cfg.solver
 
             sizing_params = SlabDesignFactors.SlabSizingParams(
@@ -660,15 +719,15 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 slab_dead_load=0.0,
                 live_factor=DEFAULT_LIVE_FACTOR,
                 dead_factor=DEFAULT_DEAD_FACTOR,
-                beam_sizer=beam_sizer,
+                beam_sizer=beam_sizer_mode,
                 nlp_solver=nlp_solver,
                 max_depth=max_depth,
                 beam_units=:in,
                 serviceability_lim=DEFAULT_SERV_LIM,
                 minimum_continuous=true,
-                collinear=true,
-                composite_action=true,
-                deflection_reduction_factor=1.0,
+                collinear=DEFAULT_COLLINEAR,
+                composite_action=DEFAULT_COMPOSITE,
+                deflection_reduction_factor=DEFAULT_DRF,
             )
 
             slab_params = SlabDesignFactors.analyze_slab(slab_params)
@@ -709,43 +768,43 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
         end
 
         dt = time() - t0
-        row = (
-            cfg.name,
-            String(cfg.solver),
-            String(slab_type),
-            String(slab_sizer),
-            max_depth,
-            warm_start_used,
-            mip_seed_count,
-            success,
-            dt,
-            n_beams,
-            n_strips,
-            norm_mass_beams,
-            ec_total,
-            max_deflection_in,
-            err,
-            beam_sizer_str,
-            nlp_solver_out,
-            deflection_limit_out,
-            composite_action_out,
-            staged_converged_out,
-            staged_n_violations_out,
-            n_L360_fail_out,
-            n_L240_fail_out,
-            global_δ_ok_out,
-            max_staged_mm_out,
-        )
 
         lock(table_lock) do
-            push!(out_df, row)
+            push!(out_df, (
+                geometry=cfg.name,
+                solver=String(cfg.solver),
+                slab_type=String(slab_type),
+                slab_sizer=String(cfg.slab_sz),
+                max_depth=max_depth,
+                warm_start_used=warm_start_used,
+                mip_seed_count=mip_seed_count,
+                success=success,
+                elapsed_s=dt,
+                n_beams=n_beams,
+                n_strips=n_strips,
+                norm_mass_beams=norm_mass_beams,
+                ec_total=ec_total,
+                max_deflection_in=max_deflection_in,
+                error_message=err,
+                config_hash=EXPERIMENTS_TOPOLOGY_CONFIG_HASH,
+                beam_sizer=beam_sizer_str,
+                nlp_solver=nlp_solver_out,
+                deflection_limit=deflection_limit_out,
+                composite_action=composite_action_out,
+                staged_converged=staged_converged_out,
+                staged_n_violations=staged_n_violations_out,
+                n_L360_fail=n_L360_fail_out,
+                n_L240_fail=n_L240_fail_out,
+                global_δ_ok=global_δ_ok_out,
+                max_staged_δ_total_mm=max_staged_mm_out,
+            ))
             write_table_atomically(results_file, out_df)
         end
     end
 end
 
-function done_set_material_mc(results_file::String)::Set{Tuple{String, String, String}}
-    out = Set{Tuple{String, String, String}}()
+function done_set_material_mc(results_file::String)::Set{NTuple{4, Any}}
+    out = Set{NTuple{4, Any}}()
     if !isfile(results_file)
         return out
     end
@@ -755,8 +814,11 @@ function done_set_material_mc(results_file::String)::Set{Tuple{String, String, S
         if !all(c -> c in names(df), required)
             return out
         end
+        if !("config_hash" in names(df))
+            return out
+        end
         for r in eachrow(df)
-            push!(out, (String(r.geometry), String(r.concrete_scenario), String(r.slab_sizer)))
+            push!(out, (String(r.geometry), String(r.concrete_scenario), String(r.slab_sizer), _row_config_hash(df, r)))
         end
     catch e
         @warn "Failed to read material_scenario_mc done-set" file=results_file exception=e
@@ -811,7 +873,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
         path = joinpath(json_path, sub_path)
         for scenario in scenarios
             for sizer in slab_sizers
-                key = (name, scenario.name, String(sizer))
+                key = (name, scenario.name, String(sizer), EXPERIMENTS_TOPOLOGY_CONFIG_HASH)
                 if key in done
                     continue
                 end
@@ -857,9 +919,11 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
             # variance decomposition
             var_frac_steel=Float64[], var_frac_conc=Float64[], var_frac_rebar=Float64[],
             error_message=String[],
+            config_hash=String[],
         )
     end
     ensure_results_columns!(out_df, STAGING_SUMMARY_COLS)
+    ensure_results_columns!(out_df, [:config_hash])
 
     table_lock = ReentrantLock()
     Threads.@threads for i in eachindex(configs)
@@ -918,9 +982,9 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
                 beam_units=:in,
                 serviceability_lim=DEFAULT_SERV_LIM,
                 minimum_continuous=true,
-                collinear=true,
-                composite_action=true,
-                deflection_reduction_factor=1.0,
+                collinear=DEFAULT_COLLINEAR,
+                composite_action=DEFAULT_COMPOSITE,
+                deflection_reduction_factor=DEFAULT_DRF,
                 E_c=scen.E_c_ksi,
                 concrete_material=scen,
             )
@@ -997,52 +1061,78 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
         end
 
         dt = time() - t0
-        row = (
-            cfg.name, scen.name, String(cfg.slab_sizer),
-            success, dt,
-            scen.ρ_concrete, scen.E_c_ksi, scen.ecc_concrete,
-            n_beams, n_strips,
-            norm_mass_beams, norm_mass_slab, norm_mass_rebar,
-            ec_beams, ec_slab, ec_rebar, ec_total,
-            max_δ,
-            mc_steel.mean, mc_steel.std, mc_steel.p5, mc_steel.p95,
-            mc_conc.mean,  mc_conc.std,  mc_conc.p5,  mc_conc.p95,
-            mc_reb.mean,   mc_reb.std,   mc_reb.p5,   mc_reb.p95,
-            mc_joint.mean, mc_joint.std, mc_joint.p5, mc_joint.p25,
-            mc_joint.p50, mc_joint.p75, mc_joint.p95,
-            vf_steel, vf_conc, vf_rebar,
-            err,
-            beam_sizer_str,
-            nlp_solver_out,
-            deflection_limit_out,
-            composite_action_out,
-            staged_converged_out,
-            staged_n_violations_out,
-            n_L360_fail_out,
-            n_L240_fail_out,
-            global_δ_ok_out,
-            max_staged_mm_out,
-        )
-
         lock(table_lock) do
-            push!(out_df, row)
+            push!(out_df, (
+                geometry=cfg.name,
+                concrete_scenario=scen.name,
+                slab_sizer=String(cfg.slab_sizer),
+                success=success,
+                elapsed_s=dt,
+                ρ_concrete_kgm3=scen.ρ_concrete,
+                E_c_ksi=scen.E_c_ksi,
+                ecc_concrete_nom=scen.ecc_concrete,
+                n_beams=n_beams,
+                n_strips=n_strips,
+                norm_mass_beams=norm_mass_beams,
+                norm_mass_slab=norm_mass_slab,
+                norm_mass_rebar=norm_mass_rebar,
+                ec_beams=ec_beams,
+                ec_slab=ec_slab,
+                ec_rebar=ec_rebar,
+                ec_total=ec_total,
+                max_deflection_in=max_δ,
+                mc_steel_mean=mc_steel.mean,
+                mc_steel_std=mc_steel.std,
+                mc_steel_p5=mc_steel.p5,
+                mc_steel_p95=mc_steel.p95,
+                mc_conc_mean=mc_conc.mean,
+                mc_conc_std=mc_conc.std,
+                mc_conc_p5=mc_conc.p5,
+                mc_conc_p95=mc_conc.p95,
+                mc_rebar_mean=mc_reb.mean,
+                mc_rebar_std=mc_reb.std,
+                mc_rebar_p5=mc_reb.p5,
+                mc_rebar_p95=mc_reb.p95,
+                mc_joint_mean=mc_joint.mean,
+                mc_joint_std=mc_joint.std,
+                mc_joint_p5=mc_joint.p5,
+                mc_joint_p25=mc_joint.p25,
+                mc_joint_p50=mc_joint.p50,
+                mc_joint_p75=mc_joint.p75,
+                mc_joint_p95=mc_joint.p95,
+                var_frac_steel=vf_steel,
+                var_frac_conc=vf_conc,
+                var_frac_rebar=vf_rebar,
+                error_message=err,
+                config_hash=EXPERIMENTS_TOPOLOGY_CONFIG_HASH,
+                beam_sizer=beam_sizer_str,
+                nlp_solver=nlp_solver_out,
+                deflection_limit=deflection_limit_out,
+                composite_action=composite_action_out,
+                staged_converged=staged_converged_out,
+                staged_n_violations=staged_n_violations_out,
+                n_L360_fail=n_L360_fail_out,
+                n_L240_fail=n_L240_fail_out,
+                global_δ_ok=global_δ_ok_out,
+                max_staged_δ_total_mm=max_staged_mm_out,
+            ))
             write_table_atomically(results_file, out_df)
         end
     end
 end
 
-function done_set_validation_mip(results_file::String)::Set{String}
-    out = Set{String}()
+function done_set_validation_mip(results_file::String)::Set{Tuple{String, String}}
+    out = Set{Tuple{String, String}}()
     if !isfile(results_file)
         return out
     end
     try
         df = CSV.read(results_file, DataFrame)
-        if !("name" in names(df))
+        if !("name" in names(df)) || !("config_hash" in names(df))
             return out
         end
         for r in eachrow(df)
-            push!(out, String(r.name))
+            push!(out, (String(r.name), _row_config_hash(df, r)))
         end
     catch e
         @warn "Failed to read validation_mip done-set" file=results_file exception=e
@@ -1067,7 +1157,8 @@ function run_validation_mip(results_path::String; json_path::String=DEFAULT_VALI
 
     configs = NamedTuple[]
     for bname in building_names
-        if bname in done
+        key = (bname, BUILDING_STUDIES_CONFIG_HASH)
+        if key in done
             continue
         end
         path = joinpath(json_path, bname * ".json")
@@ -1111,11 +1202,13 @@ function run_validation_mip(results_path::String; json_path::String=DEFAULT_VALI
                 max_depth=DEFAULT_MAX_DEPTH,
                 beam_units=:in,
                 serviceability_lim=DEFAULT_SERV_LIM,
-                collinear=false,
+                collinear=true,
                 drawn=true,
                 element_ids=type_information["element_ids"],
                 minimum_continuous=true,
                 n_max_sections=0,
+                composite_action=DEFAULT_COMPOSITE,
+                deflection_reduction_factor=DEFAULT_DRF,
             )
 
             slab_params = SlabDesignFactors.analyze_slab(slab_params)
@@ -1124,6 +1217,7 @@ function run_validation_mip(results_path::String; json_path::String=DEFAULT_VALI
                 @warn "No minimizers for validation_mip" name=cfg.name
             else
                 slab_results = SlabDesignFactors.postprocess_slab(slab_params, beam_sizing_params)
+                slab_results.config_hash = BUILDING_STUDIES_CONFIG_HASH
                 lock(append_lock) do
                     SlabDesignFactors.append_results_to_csv(results_path * "/", results_name, [slab_results])
                 end

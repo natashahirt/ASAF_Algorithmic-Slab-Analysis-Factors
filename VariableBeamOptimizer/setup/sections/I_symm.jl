@@ -467,11 +467,24 @@ end
 """
     get_ϕVn(self::I_symm; axis, ϕ) -> Real
 
-Design shear strength ϕVn (LRFD). Default ϕ = 1.0 for strong-axis
-rolled I-shapes per G2.1(a), ϕ = 0.9 for weak-axis per G7.
+Design shear strength ϕVn (LRFD).
+
+For strong-axis shear, AISC 360-16 G2.1(a) permits ϕ_v = 1.0 only when
+`h/tw <= 2.24√(E/Fy)`; otherwise ϕ_v = 0.9.  Weak-axis: ϕ_v = 0.9 per G7.
+An explicit `ϕ` overrides the automatic selection.
 """
 function get_ϕVn(self::I_symm; axis::Symbol=:strong, ϕ::Union{Real,Nothing}=nothing)
-    ϕ_use = isnothing(ϕ) ? (axis == :strong ? 1.0 : 0.9) : ϕ
+    if isnothing(ϕ)
+        if axis == :strong
+            h_w = self.h - 2 * self.tf
+            E, Fy = self.material.E, self.material.Fy
+            ϕ_use = (h_w / self.tw <= 2.24 * sqrt(E / Fy)) ? 1.0 : 0.9
+        else
+            ϕ_use = 0.9
+        end
+    else
+        ϕ_use = ϕ
+    end
     return ϕ_use * get_Vn(self; axis=axis)
 end
 

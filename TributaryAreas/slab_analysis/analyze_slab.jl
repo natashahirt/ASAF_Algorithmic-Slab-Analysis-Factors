@@ -93,6 +93,16 @@ function analyze_orth_biaxial_slab(self)
     return self
 end
 
+"""
+Merge per-beam point loads from slab strip generation into one load per station.
+
+Multi-cycle topologies append strips from each cycle; the same beam station may
+receive two contributions. `consolidate_loads` averages paired magnitudes with
+`/2` when merging. This is **not** a double-counting
+bug: `sum(load_volumes)` before consolidation can exceed physical slab volume
+because cycles overlap on interior beams; the consolidated `model.loads` balance
+reactions (verified in `SlabDesignFactors/test/test_consolidate_loads.jl`).
+"""
 function consolidate_beam_loads(self::SlabAnalysisParams)
     tol = 1e-2
     loads = Asap.AbstractLoad[]
@@ -118,6 +128,14 @@ function consolidate_beam_loads(self::SlabAnalysisParams)
     return self
 end
 
+"""
+Merge loads at the same normalized position along a beam (within `tol`).
+
+Each raw contribution is halved before summing so that **two** cycle contributions
+at the same station yield the correct total. Do not interpret `sum(load_volumes)`
+globally as slab volume without accounting for multi-cycle aggregation — see
+`SlabDesignFactors/test/test_consolidate_loads.jl`.
+"""
 function consolidate_loads(beam_loads, tol)
     params = [beam_loads[1].position]
     values = [abs(beam_loads[1].value[3] / 2)]

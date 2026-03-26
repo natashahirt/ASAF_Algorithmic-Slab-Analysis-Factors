@@ -20,6 +20,8 @@ using Test
         include("test_compression.jl")
         include("test_slab_depth_minimum.jl")
         include("test_staged_deflection.jl")
+        include("test_consolidate_loads.jl")
+        include("test_results_csv.jl")
     end
     @testset "Integration tests" begin
         include("test_integration.jl")

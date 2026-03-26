@@ -111,7 +111,9 @@ function process_discrete_beams_integer(params::SlabSizingParams)
     catalogue_df = _get_catalogue_df(params.max_depth)
     n_cat = nrow(catalogue_df)
 
-    # Build beams DataFrame column-wise
+    # Ensure factored beam self-weight is on the model so MIP demands include it
+    refresh_factored_loads_with_beam_sw!(params)
+
     n_be = lastindex(beam_elements)
     beam_names = Vector{Tuple{Int,Int}}(undef, n_be)
     beam_M = Vector{Float64}(undef, n_be)
@@ -729,6 +731,12 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
     for demand_iter in 1:max_demand_iters
         println("─── demand iteration $demand_iter / $max_demand_iters ───")
 
+        # Factored slab/applied loads + beam self-weight line loads for strength demands
+        update_load_values!(params.model, params, factored=true)
+        sync_beam_selfweight_lineloads!(params, factored=true, vars=current_vars)
+        Asap.solve!(params.model, reprocess=true)
+        params.load_dictionary = get_load_dictionary_by_id(params.model)
+
         # ── compute demands from current stiffnesses ─────────────────────
         beam_ids = Vector{Tuple{Int,Int}}(undef, n_beams)
         M_maxs = Vector{Float64}(undef, n_beams)
@@ -1196,12 +1204,15 @@ function internalforces_M_V(beam_element::Element, beam_loads::Vector{Asap.Abstr
     My .= Vystart .* xinc .- Mystart
     Vy .= Vystart
 
-    for (i, load) in enumerate(beam_loads)
-        # distributed load magnitudes in LCS
+    for load in beam_loads
         px, py, pz = (R * load.value) .* [1, -1, -1]
-
-        My .+= moment_function.(py, L, xinc, load.position)
-        Vy .+= shear_function.(py, L, xinc, load.position)
+        if is_pointload(load)
+            My .+= moment_function.(py, L, xinc, load.position)
+            Vy .+= shear_function.(py, L, xinc, load.position)
+        elseif is_lineload(load)
+            My .+= AsapToolkit.MLine.(Ref(beam_element), py, L, xinc)
+            Vy .+= AsapToolkit.VLine.(Ref(beam_element), py, L, xinc)
+        end
     end
 
     return maximum(abs.(My)), maximum(abs.(Vy)), L
@@ -1229,12 +1240,15 @@ function internalforces_M_V_all(beam_element::Element, beam_loads::Vector{Asap.A
     My .= Vystart .* xinc .- Mystart
     Vy .= Vystart
 
-    for (i, load) in enumerate(beam_loads)
-        # distributed load magnitudes in LCS
+    for load in beam_loads
         px, py, pz = (R * load.value) .* [1, -1, -1]
-
-        My .+= moment_function.(py, L, xinc, load.position)
-        Vy .+= shear_function.(py, L, xinc, load.position)
+        if is_pointload(load)
+            My .+= moment_function.(py, L, xinc, load.position)
+            Vy .+= shear_function.(py, L, xinc, load.position)
+        elseif is_lineload(load)
+            My .+= AsapToolkit.MLine.(Ref(beam_element), py, L, xinc)
+            Vy .+= AsapToolkit.VLine.(Ref(beam_element), py, L, xinc)
+        end
     end
 
     return abs.(My), abs.(Vy), collect(xinc)

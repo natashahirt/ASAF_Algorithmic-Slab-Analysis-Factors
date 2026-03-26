@@ -32,3 +32,19 @@ const FULL_SWEEP_STRIP_SPACING = 0.01  # `SlabAnalysisParams.spacing` [m]
 const FULL_SWEEP_COMPOSITE_ACTION = true
 const FULL_SWEEP_COLLINEAR = true
 const FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR = 1.0
+
+const FULL_SWEEP_CODE_VERSION = "2025-03-25-v4"
+
+const FULL_SWEEP_CONFIG_HASH = let
+    h = hash(FULL_SWEEP_LIVE_LOAD)
+    h = hash(FULL_SWEEP_SUPERIMPOSED_DEAD_LOAD, h)
+    h = hash(FULL_SWEEP_LIVE_FACTOR, h)
+    h = hash(FULL_SWEEP_DEAD_FACTOR, h)
+    h = hash(FULL_SWEEP_SERVICEABILITY_LIM, h)
+    h = hash(FULL_SWEEP_COMPOSITE_ACTION, h)
+    h = hash(FULL_SWEEP_COLLINEAR, h)
+    h = hash(FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR, h)
+    h = hash(ECC_FIREPROOFING, h)
+    h = hash(FULL_SWEEP_CODE_VERSION, h)
+    string(h, base=16)
+end

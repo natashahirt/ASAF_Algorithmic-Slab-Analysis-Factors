@@ -1,7 +1,7 @@
 include("errors.jl")
 include("conversions.jl")
-include("full_sweep_defaults.jl")
 include("constants.jl")
+include("full_sweep_defaults.jl")
 include("materials.jl")
 include("structs.jl")
 include("structs_utils.jl")

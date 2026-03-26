@@ -509,6 +509,11 @@ Updates the vertical load values (load.value[3]) for all loads in the model base
     - :unfactored_beam_load
 
 """
+function _is_beam_sw_lineload(params::SlabSizingParams, load)::Bool
+    isempty(params.beam_sw_line_loads) && return false
+    return any(l -> l === load, params.beam_sw_line_loads)
+end
+
 function update_load_values!(model::Asap.Model, params::SlabSizingParams; factored::Bool=true)
     loadid_index = _build_loadid_index(params)
     
@@ -521,6 +526,7 @@ function update_load_values!(model::Asap.Model, params::SlabSizingParams; factor
             end
         # Line loads (e.g., facade) do not carry loadID in this pipeline.
         elseif is_lineload(load)
+            _is_beam_sw_lineload(params, load) && continue
             w_unfactored = !iszero(params.façade_load) ? abs(params.façade_load) :
                            (params.dead_factor > 0 ? abs(load.value[3]) / params.dead_factor : abs(load.value[3]))
             w_new = factored ? params.dead_factor * w_unfactored : w_unfactored
@@ -596,11 +602,132 @@ function update_load_values_staged!(model::Asap.Model, params::SlabSizingParams;
             load.value = [0, 0, -w]
 
         elseif is_lineload(load)
+            if _is_beam_sw_lineload(params, load)
+                # Beam SW is omitted from staged FE (handled analytically in `_verify_staged_deflection`).
+                load.value = [0, 0, 0]
+                continue
+            end
             w_unfactored = !iszero(params.façade_load) ? abs(params.façade_load) :
                            (params.dead_factor > 0 ? abs(load.value[3]) / params.dead_factor : abs(load.value[3]))
             include_facade = load_case in (:slab_dead, :all)
             load.value = [0, 0, include_facade ? -w_unfactored : 0.0]
         end
+    end
+end
+
+"""
+    sync_beam_selfweight_lineloads!(params)
+
+Append or update uniform line loads for steel self-weight on each beam (kip/in).
+When `factored=true`, uses `dead_factor * A * ρ`; when `false`, uses `A * ρ` for serviceability snapshots.
+
+`vars` may supply beam geometry rows (same layout as `params.minimizers`) when minimizers are not yet committed, e.g. NLP demand iterations.
+"""
+function sync_beam_selfweight_lineloads!(params::SlabSizingParams; factored::Bool=true,
+                                        vars::Union{Nothing,Vector{Vector{Float64}}}=nothing)
+    geom = isnothing(vars) ? params.minimizers : vars
+    isempty(geom) && return
+    model = params.model
+    isnothing(model) && return
+    beam_elements = model.elements[:beam]
+    n_be = length(beam_elements)
+    n_be == length(geom) || return
+    ρ = steel_ksi.ρ
+    mult = factored ? params.dead_factor : 1.0
+
+    if length(params.beam_sw_line_loads) != n_be
+        if !isempty(params.beam_sw_line_loads)
+            filter!(l -> !any(sw -> sw === l, params.beam_sw_line_loads), model.loads)
+            empty!(params.beam_sw_line_loads)
+        end
+        for i in 1:n_be
+            h, w, tw, tf = geom[i]
+            A = A_I_symm(h, w, tw, tf)
+            w_mag = mult * A * ρ
+            ll = LineLoad(beam_elements[i], [0, 0, -w_mag])
+            push!(model.loads, ll)
+            push!(params.beam_sw_line_loads, ll)
+        end
+    else
+        for i in 1:n_be
+            h, w, tw, tf = geom[i]
+            A = A_I_symm(h, w, tw, tf)
+            w_mag = mult * A * ρ
+            params.beam_sw_line_loads[i].value = [0, 0, -w_mag]
+        end
+    end
+    nothing
+end
+
+"""
+    refresh_factored_loads_with_beam_sw!(params)
+
+Apply slab/applied point loads and façade line loads, then sync factored beam self-weight,
+re-solve, and rebuild `load_dictionary`.
+"""
+function refresh_factored_loads_with_beam_sw!(params::SlabSizingParams)
+    model = params.model
+    isnothing(model) && return
+    update_load_values!(model, params, factored=true)
+    sync_beam_selfweight_lineloads!(params, factored=true)
+    Asap.solve!(model, reprocess=true)
+    params.load_dictionary = get_load_dictionary_by_id(model)
+    nothing
+end
+
+"""
+    finalize_beam_selfweight_factored_demands!(params)
+
+Fixed-point refresh of `M_maxs` / `V_maxs` / `x_maxs` after adding factored beam self-weight
+to the global model (columns and utilization use the final solve).
+"""
+function finalize_beam_selfweight_factored_demands!(params::SlabSizingParams;
+                                                     max_iters::Int=5,
+                                                     rel_tol::Float64=1e-3)
+    isempty(params.minimizers) && return
+    model = params.model
+    isnothing(model) && return
+    beam_elements = model.elements[:beam]
+    n_be = length(beam_elements)
+    n_be == length(params.minimizers) || return
+
+    E_s = steel_ksi.E
+    for i in 1:n_be
+        h, w, tw, tf = params.minimizers[i]
+        A = A_I_symm(h, w, tw, tf)
+        Ix = Ix_I_symm(h, w, tw, tf)
+        Iy = Iy_I_symm(h, w, tw, tf)
+        J = J_I_symm(h, w, tw, tf)
+        beam_elements[i].section = Section(A, E_s, steel_ksi.G, Ix, Iy, J)
+    end
+
+    prev_M = Float64[]
+    for it in 1:max_iters
+        refresh_factored_loads_with_beam_sw!(params)
+        new_M = Vector{Float64}(undef, n_be)
+        new_V = Vector{Float64}(undef, n_be)
+        new_x = Vector{Float64}(undef, n_be)
+        for i in 1:n_be
+            beam_id = get_element_id(beam_elements[i])
+            beam_loads = params.load_dictionary[beam_id]
+            bf = InternalForces(beam_elements[i], beam_loads, resolution=200)
+            new_M[i] = maximum(abs.(bf.My))
+            new_V[i] = maximum(abs.(bf.Vy))
+            new_x[i] = maximum(abs.(bf.x))
+        end
+        if it > 1 && length(prev_M) == n_be
+            rel = maximum(abs.(new_M .- prev_M) ./ max.(abs.(prev_M), 1e-12))
+            if rel < rel_tol
+                params.M_maxs = new_M
+                params.V_maxs = new_V
+                params.x_maxs = new_x
+                return
+            end
+        end
+        prev_M = new_M
+        params.M_maxs = new_M
+        params.V_maxs = new_V
+        params.x_maxs = new_x
     end
 end
 
