@@ -3,10 +3,10 @@
 #SBATCH -N 1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH -t 12:00:00
+#SBATCH -t 04:00:00
 #SBATCH -p mit_normal
-#SBATCH -o outputs/slurm_tests_%j.out
-#SBATCH -e outputs/slurm_tests_%j.err
+#SBATCH -o outputs/slurm_preflight_%j.out
+#SBATCH -e outputs/slurm_preflight_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=nhirt@mit.edu
 
@@ -31,7 +31,7 @@ export SLABDESIGN_SKIP_MAKIE="${SLABDESIGN_SKIP_MAKIE:-1}"
 export SLABDESIGN_SKIP_REVISE="${SLABDESIGN_SKIP_REVISE:-1}"
 export JULIA_NUM_PRECOMPILE_TASKS="${JULIA_NUM_PRECOMPILE_TASKS:-1}"
 
-echo "Running SlabDesignFactors tests via Slurm batch node"
+echo "Running SlabDesignFactors preflight tests via Slurm batch node"
 echo "Repo root: ${REPO_ROOT}"
 echo "Threads: ${SLURM_CPUS_PER_TASK:-1}"
 
@@ -40,4 +40,4 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --threads "${SLURM_CPUS_PER_TASK:-1}" \
   --compiled-modules=no \
   --project=. \
-  SlabDesignFactors/test/run.jl
+  SlabDesignFactors/test/run_preflight.jl

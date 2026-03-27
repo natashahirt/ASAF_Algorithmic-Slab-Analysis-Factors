@@ -23,6 +23,9 @@ using Test
         include("test_consolidate_loads.jl")
         include("test_results_csv.jl")
     end
+    @testset "Preflight parity tests" begin
+        include("test_preflight_mip_nlp.jl")
+    end
     @testset "Integration tests" begin
         include("test_integration.jl")
         include("test_slurm_pipeline.jl")

@@ -149,12 +149,7 @@ if GUROBI_AVAILABLE
 
             # ── 1. Feasibility ─────────────────────────────────────────
             @testset "beams exist" begin
-                if !comp_ok
-                    @warn "$name: composite design infeasible (likely long spans + depth limit)"
-                    @test_skip comp_ok
-                else
-                    @test comp_ok
-                end
+                @test comp_ok
             end
 
             # ── 2. Composite mass is finite and positive ─────────────
@@ -319,12 +314,7 @@ if GUROBI_AVAILABLE
             nc_ok = result_ok(res_nc)
 
             @testset "beams exist" begin
-                if !nc_ok
-                    @warn "$name: noncollinear design infeasible"
-                    @test_skip nc_ok
-                else
-                    @test nc_ok
-                end
+                @test nc_ok
             end
 
             if nc_ok
@@ -389,12 +379,7 @@ if nlp_available
             nlp_comp_ok = result_ok(res_nlp_comp)
 
             @testset "beams exist" begin
-                if !nlp_comp_ok
-                    @warn "$name [NLP]: composite infeasible"
-                    @test_skip nlp_comp_ok
-                else
-                    @test nlp_comp_ok
-                end
+                @test nlp_comp_ok
             end
 
             @testset "NLP mass valid" begin
@@ -504,6 +489,11 @@ if GUROBI_AVAILABLE
             mip_ok = result_ok(res_mip)
             nlp_ok = result_ok(res_nlp)
 
+            @testset "MIP and NLP both feasible on baseline geometry" begin
+                @test mip_ok
+                @test nlp_ok
+            end
+
             if mip_ok && nlp_ok
                 ratio = res_mip.norm_mass_beams > 0 ? res_nlp.norm_mass_beams / res_mip.norm_mass_beams : NaN
                 println("    MIP:  $(round(res_mip.norm_mass_beams, digits=2)) kg/m²")
@@ -516,11 +506,9 @@ if GUROBI_AVAILABLE
                     else
                         @warn "$name: NLP local optimum exceeds MIP " *
                               "($(round(ratio, digits=3))×); Ipopt likely stuck in local min"
-                        @test_broken res_nlp.norm_mass_beams <= res_mip.norm_mass_beams + 1e-3
+                        @test res_nlp.norm_mass_beams <= res_mip.norm_mass_beams + 1e-3
                     end
                 end
-            else
-                @warn "Skipping MIP vs NLP comparison for $name — one or both infeasible"
             end
         end
 

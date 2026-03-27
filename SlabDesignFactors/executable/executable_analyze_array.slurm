@@ -2,6 +2,10 @@
 
 #SBATCH -N 1
 #SBATCH --cpus-per-task=8
+# Explicit RAM (partition default OOM’d Julia+Gurobi shards). Tune after measuring MaxRSS:
+#   sacct -j JOBID -o JobID,State,ReqMem,MaxRSS --units=G
+# https://orcd-docs.mit.edu/running-jobs/requesting-resources/#memory
+#SBATCH --mem=64G
 #SBATCH --array=1-16
 #SBATCH -t 12:00:00
 #SBATCH -p mit_normal

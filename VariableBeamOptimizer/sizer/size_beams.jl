@@ -1,7 +1,7 @@
 """
-    optimal_beamsizer!(self::SlabAnalysisParams, initial_vars::Vector; max_depth::Real=21, sizing_unit::Symbol=:in, deflection_limit::Bool=true, verbose::Bool=true, minimum::Bool=true, max_assembly_depth::Bool=true)
+    optimal_beamsizer!(self, params; initial_vars)
 
-Optimizes beam sizes based on initial variables and parameters. Returns the optimal beam sizes.
+Mutating wrapper for [`optimal_beamsizer`](@ref).
 """
 function optimal_beamsizer!(self::SlabAnalysisParams, params::SlabSizingParams; initial_vars::Vector=[])
     @assert !isempty(initial_vars) "You need to input initial variables as a list of strings ['W6X8.5', ...] or vectors of floats [[4.17, 4.055, 0.27, 0.34], ...]"
@@ -11,16 +11,21 @@ end
 """
     optimal_beamsizer(self, params; initial_vars, max_staged_iters)
 
-Takes metric forces to size imperial beams and returns imperial beams.
+Entry point for beam sizing.  Two paths:
 
-When composite action is enabled and staged load columns exist in `load_df`,
-an outer convergence loop verifies the sized sections against exact staged
-deflection limits (L/360 live, L/240 total) using global FE solves.  Beams
-that violate a limit have their minimum Ix floors tightened, and the sizer
-re-runs until all beams comply or `max_staged_iters` is reached.
+**MIP (`:discrete`)** — Integer programming selects the lightest catalog W-shape
+per beam.  An outer convergence loop verifies sections against exact staged
+deflection limits (L/360 live, L/240 total) via global FE solves.  Beams that
+violate a limit have their minimum Ix floors tightened, and the MIP re-runs
+until all beams comply or `max_staged_iters` is reached.
+
+**NLP (`:continuous`)** — First runs an MIP to obtain global demands and staging
+geometry, then refines each beam independently via `process_continuous_per_beam`.
+Deflection is enforced via a single bare-Ix lower bound per beam (computed from
+the MIP geometry); the outer staged-deflection loop is bypassed.
 """
 function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
-                           initial_vars::Vector=[], max_staged_iters::Int=15)
+                           initial_vars::Vector=[], max_staged_iters::Int=25)
 
     params.model = self.model
 
@@ -58,21 +63,24 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
                  params.deflection_limit &&
                  :unfactored_w_live in propertynames(params.load_df)
 
-    # ── MIP warm-start for NLP: run discrete sizing first to seed NLP ──
-    if params.beam_sizer == :continuous && isempty(initial_vars)
+    # ── MIP pass for NLP: run discrete sizing to get global demands ─────
+    # Skipped when the caller already supplied an mip_result (e.g.
+    # iterate_discrete_continuous reuses the MIP it already ran).
+    if params.beam_sizer == :continuous && isnothing(params.mip_result)
         try
-            println("Running MIP warm-start for NLP...")
+            println("Running MIP for global demands...")
             mip_params = deepcopy(params)
             mip_params.beam_sizer = :discrete
             mip_params = process_discrete_beams_integer(mip_params)
             if !isempty(mip_params.ids)
-                initial_vars = mip_params.ids
                 params.mip_result = mip_params
-                println("  MIP warm-start: $(length(initial_vars)) sections seeded.")
+                println("  MIP: $(length(mip_params.ids)) sections → frozen demands for per-beam NLP.")
             end
         catch e
-            @warn "MIP warm-start failed; NLP will use default init" exception=e
+            @warn "MIP pass failed; continuous sizing cannot proceed" exception=e
         end
+    elseif params.beam_sizer == :continuous
+        println("Reusing caller-supplied MIP result ($(length(params.mip_result.minimizers)) beams).")
     end
 
     # Preserve the best valid sizing result across outer-loop iterations
@@ -102,7 +110,10 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
 
         try
             if params.beam_sizer == :continuous
-                params = process_continuous_beams_parallel(params, initial_vars=initial_vars)
+                params = process_continuous_per_beam(
+                    params;
+                    mip_result=params.mip_result,
+                )
             elseif params.beam_sizer == :discrete
                 params = process_discrete_beams_integer(params)
             end
@@ -124,6 +135,16 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
             break
         end
 
+        # NLP performs its own final FE-based acceptance and staged bookkeeping.
+        if params.beam_sizer == :continuous
+            if params.collinear && !isempty(params.minimizers)
+                params.minimizers, params.ids, params.minimums =
+                    collect_collinear_elements(self, params)
+            end
+            final_n_viol = params.staged_n_violations
+            break
+        end
+
         # If sizing failed (e.g. infeasible MIP), restore best prior result
         if isempty(params.minimizers)
             @warn "Sizing produced no results on iteration $staged_iter; restoring best prior result."
@@ -134,6 +155,12 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
             params.V_maxs     = best_V_maxs
             params.x_maxs     = best_x_maxs
             break
+        end
+
+        # Unify sections within collinear groups (heaviest in group) so staged verification
+        # and postprocess_slab use the same minimizers as `params.collinear == true`.
+        if params.collinear
+            params.minimizers, params.ids, params.minimums = collect_collinear_elements(self, params)
         end
 
         # Snapshot current result as the best so far
@@ -172,27 +199,13 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
             target = val * overshoot
             old = get(params.min_Ix_comp, i, 0.0)
             blended = old + α * (target - old)
-            params.min_Ix_comp[i] = cycling ? max(old, blended) : blended
+            params.min_Ix_comp[i] = max(old, blended)
         end
         for (i, val) in new_Ix_bare
             target = val * overshoot
             old = get(params.min_Ix_bare, i, 0.0)
             blended = old + α * (target - old)
-            params.min_Ix_bare[i] = cycling ? max(old, blended) : blended
-        end
-
-        if !cycling
-            # Decay floors for beams no longer in violation (disabled when cycling)
-            for i in collect(keys(params.min_Ix_comp))
-                if !haskey(new_Ix_comp, i)
-                    params.min_Ix_comp[i] *= (1 - α)
-                end
-            end
-            for i in collect(keys(params.min_Ix_bare))
-                if !haskey(new_Ix_bare, i)
-                    params.min_Ix_bare[i] *= (1 - α)
-                end
-            end
+            params.min_Ix_bare[i] = max(old, blended)
         end
 
         if staged_iter == max_staged_iters
@@ -568,18 +581,10 @@ end
     iterate_discrete_continuous(analysis_params, sizing_params)
 
 Run MIP (discrete) then NLP (continuous) sizing for one slab.  The MIP
-result seeds the NLP via `initial_vars`, so the MIP only runs once.
+result is passed to the NLP via `mip_result`, so the MIP only runs once.
 
-When `sizing_params.collinear == true`, same-section constraints are enforced
-**during** both the MIP and NLP solves; postprocessing follows the solver flag
-without overriding it.
-
-# Returns
-A 4-tuple `(discrete_noncollinear, discrete_collinear,
-            continuous_noncollinear, continuous_collinear)` of `SlabOptimResults`
-for backward compatibility with CSV consumers that key on `(beam_sizer, collinear)`.
-When `sizing_params.collinear == true`, the noncollinear and collinear results
-within each sizer are identical (solver already enforced matching sections).
+Returns a 4-tuple of `SlabOptimResults` for backward compatibility with CSV
+consumers that key on `(beam_sizer, collinear)`.
 """
 function iterate_discrete_continuous(analysis_params::SlabAnalysisParams, sizing_params::SlabSizingParams)
 
@@ -635,15 +640,13 @@ function iterate_discrete_continuous(analysis_params::SlabAnalysisParams, sizing
     end
 
     # ── Continuous (NLP) sizing, seeded by the MIP result above ───────────
-    # Passing initial_vars skips the redundant internal MIP warm-start
-    # inside optimal_beamsizer (line 62: fires only when initial_vars is empty).
     if discrete_ok
         try
             sizing_params.mip_result = deepcopy(sizing_params)
             sizing_params.beam_sizer = :continuous
             sizing_params = reset_SlabSizingParams(sizing_params)
             analysis_params, sizing_params = optimal_beamsizer(
-                analysis_params, sizing_params, initial_vars=mip_minimizers)
+                analysis_params, sizing_params)
 
             if !isempty(sizing_params.minimizers)
                 slab_results_continuous_collinear = postprocess_slab(analysis_params, sizing_params)

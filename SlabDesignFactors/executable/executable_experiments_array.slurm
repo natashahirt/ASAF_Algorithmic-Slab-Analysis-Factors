@@ -2,6 +2,8 @@
 
 #SBATCH -N 1
 #SBATCH --cpus-per-task=8
+# https://orcd-docs.mit.edu/running-jobs/requesting-resources/#memory
+#SBATCH --mem=64G
 #SBATCH --array=1-6
 #SBATCH -t 12:00:00
 #SBATCH -p mit_normal

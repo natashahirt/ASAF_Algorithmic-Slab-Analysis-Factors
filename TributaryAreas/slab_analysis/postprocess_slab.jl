@@ -365,7 +365,8 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
             displacements = ElementDisplacements(beam_elements[i],
                 params.load_dictionary[beam_ids[i]], resolution=resolution)
             δ_locals[i] = displacements.ulocal[2, :]
-            δ_globals[i] = displacements.uglobal[2, :]
+            # Slab loads are vertical in global z; report global deflection in z.
+            δ_globals[i] = displacements.uglobal[3, :]
         end
     end
 
