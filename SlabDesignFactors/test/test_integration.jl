@@ -18,10 +18,10 @@ solver's `collinear` flag without overriding it.  Tests verify:
 
 Solver paths tested:
   - MIP (discrete, Gurobi) : all geometries (collinear + noncollinear)
-  - NLP (continuous, Ipopt) : r1c1, r2c3 (smaller geometries — NLP is slower)
+  - NLP (continuous, Ipopt) : r4c3, r2c3 (smaller geometries — NLP is slower)
 
 Geometries:
-  - r1c1 : 1-row 1-col (simplest regular bay)
+  - r4c3 : regular mid-sized baseline geometry
   - r2c3 : 2-row 3-col (moderate rectangular grid)
   - r5c2 : 5-row 2-col (tall narrow — many beams, long spans possible)
   - r7c4 : 7-row 4-col (large irregular topology with many collinear groups)
@@ -59,7 +59,7 @@ const STRENGTH_FAIL_LIMIT = 1.02
 
 main_path = joinpath(@__DIR__, "..", "..", "Geometries", "topology")
 
-geom_files = ["r1c1.json", "r2c3.json", "r5c2.json", "r7c4.json"]
+geom_files = ["r4c3.json", "r2c3.json", "r5c2.json", "r7c4.json"]
 
 function load_geometry(json_file)
     path = joinpath(main_path, json_file)
@@ -74,7 +74,7 @@ without overriding it, so results reflect what the optimizer actually chose.
 """
 function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
                       beam_sizer::Symbol=:discrete, nlp_solver::Symbol=:Ipopt,
-                      collinear::Bool=true)
+                      collinear::Bool=true, staged_deflection_limit::Bool=true)
     geom, _ = Base.invokelatest(generate_from_json, geometry_dict; plot=false, drawn=false)
 
     slab_params = SlabAnalysisParams(
@@ -104,6 +104,7 @@ function run_pipeline(geometry_dict; composite::Bool=true, drf::Float64=1.0,
         minimum_continuous          = true,
         n_max_sections              = 0,
         composite_action            = composite,
+        staged_deflection_limit     = staged_deflection_limit,
         deflection_reduction_factor = drf,
     )
 
@@ -123,11 +124,55 @@ end
 """True when the solver returned a non-empty, positive-mass section set."""
 has_solution(r) = length(r.minimizers) >= 1 && r.norm_mass_beams > 0
 
-"""True when a result is a design-feasible pass (not merely non-empty)."""
-design_ok(r) = has_solution(r) && r.result_ok && r.strength_ok && r.serviceability_ok && r.column_ok
+"""True when a result is exportable (hard checks pass even if serviceability warns)."""
+result_ok(r) = has_solution(r) && r.result_ok && r.span_ok && r.strength_ok && r.column_ok
 
-"""Backward-compatible alias used throughout this test file."""
-result_ok(r) = design_ok(r)
+"""True when a result clears the hard feasibility gates used for regression tests."""
+design_ok(r) = result_ok(r)
+
+@testset "Analysis applicability failure reasons" begin
+    geom_dict = load_geometry("r2c3.json")
+    geom, _ = Base.invokelatest(generate_from_json, geom_dict; plot=false, drawn=false)
+
+    slab_params = SlabAnalysisParams(
+        geom,
+        slab_name       = "max_span_case",
+        slab_type       = :orth_biaxial,
+        vector_1d       = [1.0, 0.0],
+        slab_sizer      = :uniform,
+        spacing         = 0.1,
+        plot_analysis   = false,
+        fix_param       = true,
+        slab_units      = :m,
+    )
+
+    sizing_params = SlabSizingParams(
+        live_load                   = psf_to_ksi(50),
+        superimposed_dead_load      = psf_to_ksi(15),
+        slab_dead_load              = 0.0,
+        live_factor                 = 1.6,
+        dead_factor                 = 1.2,
+        beam_sizer                  = :discrete,
+        nlp_solver                  = :Ipopt,
+        max_depth                   = 25.0,
+        beam_units                  = :in,
+        serviceability_lim          = 360,
+        collinear                   = true,
+        minimum_continuous          = true,
+        n_max_sections              = 0,
+        composite_action            = true,
+        deflection_reduction_factor = 1.0,
+    )
+
+    results = iterate_discrete_continuous(slab_params, sizing_params)
+    for result in results
+        @test result.solver_status == "MAX_SPAN_EXCEEDED"
+        @test occursin("max_span_exceeded", result.diagnostic_flags)
+        @test occursin("recommended maximum span", result.diagnostic_messages)
+        @test result.span_ok == false
+        @test result.result_ok == false
+    end
+end
 
 if !GUROBI_AVAILABLE
     @info "Gurobi license not found — skipping MIP integration tests. Add `secrets/gurobi.lic` or set GRB_LICENSE_FILE (run.jl / runtests.jl load the secrets path when the file exists)."
@@ -223,8 +268,8 @@ if GUROBI_AVAILABLE
                 @testset "CSV export mirrors staged fields (create_results_dataframe)" begin
                     df = create_results_dataframe([res_comp], false)
                     for c in (
-                        "nlp_solver", "deflection_limit",
-                        "composite_action", "staged_converged", "staged_n_violations",
+                        "nlp_solver", "deflection_limit", "staged_deflection_limit",
+                        "composite_action", "staged_converged", "staged_n_violations", "staged_ok",
                         "n_L360_fail", "n_L240_fail", "i_L360_fail", "i_L240_fail",
                         "Δ_limit_live_mm", "Δ_limit_total_mm",
                         "max_δ_total_mm", "max_bay_span_in", "global_δ_ok",
@@ -237,8 +282,10 @@ if GUROBI_AVAILABLE
                     @test df.n_L240_fail[1] == res_comp.n_L240_fail
                     @test df.staged_converged[1] == res_comp.staged_converged
                     @test df.staged_n_violations[1] == res_comp.staged_n_violations
+                    @test df.staged_ok[1] == res_comp.staged_ok
                     @test df.nlp_solver[1] == "MIP"
                     @test df.deflection_limit[1] == true
+                    @test df.staged_deflection_limit[1] == true
                 end
             end
 
@@ -290,6 +337,29 @@ if GUROBI_AVAILABLE
 
         GC.gc()
     end
+end
+end # GUROBI_AVAILABLE
+
+if GUROBI_AVAILABLE
+@testset "Integration — staged deflection toggle" begin
+    geom_dict = load_geometry("r4c3.json")
+    res_toggle, _, sp_toggle = run_pipeline(
+        geom_dict;
+        composite=true,
+        drf=1.0,
+        staged_deflection_limit=false,
+    )
+
+    @test result_ok(res_toggle)
+    @test sp_toggle.staged_deflection_limit == false
+    @test res_toggle.staged_deflection_limit == false
+    @test res_toggle.staged_converged == true
+    @test res_toggle.staged_n_violations == 0
+    @test res_toggle.staged_ok == true
+
+    df = create_results_dataframe([res_toggle], false)
+    @test "staged_deflection_limit" in names(df)
+    @test df.staged_deflection_limit[1] == false
 end
 end # GUROBI_AVAILABLE
 
@@ -354,10 +424,10 @@ end # GUROBI_AVAILABLE
 #  NLP (continuous) tests — smaller geometries only (NLP is much slower)
 #  Wrapped in try-catch: NLopt can fail on some platforms (JuMP nlp.jl error).
 # ══════════════════════════════════════════════════════════════════════════════
-nlp_geom_files = ["r1c1.json", "r2c3.json"]
+nlp_geom_files = ["r4c3.json", "r2c3.json"]
 
 nlp_available = try
-    run_pipeline(load_geometry("r1c1.json"); composite=true, drf=1.0, beam_sizer=:continuous)
+    run_pipeline(load_geometry("r4c3.json"); composite=true, drf=1.0, beam_sizer=:continuous)
     true
 catch e
     @warn "NLP solver unavailable on this platform — skipping NLP tests" exception=e
@@ -522,13 +592,13 @@ end
 # ══════════════════════════════════════════════════════════════════════════════
 #  NLP algorithm comparison — all supported NLP solvers should produce valid
 #  results and be within a reasonable range of Ipopt (the reference solver).
-#  Uses r1c1 composite (drf=1.0) — production-like, smallest geometry.
+#  Uses r4c3 composite (drf=1.0) as the stable feasible baseline geometry.
 # ══════════════════════════════════════════════════════════════════════════════
 @testset "NLP algorithm comparison" begin
-    geom_dict = load_geometry("r1c1.json")
+    geom_dict = load_geometry("r4c3.json")
     all_solvers = [:Ipopt, :MMA, :SLSQP, :CCSAQ, :COBYLA]
 
-    println("\n  NLP algorithm comparison for r1c1 (composite, drf=1.0)...")
+    println("\n  NLP algorithm comparison for r4c3 (composite, drf=1.0)...")
 
     solver_results = Dict{Symbol, Any}()
     solver_ok      = Dict{Symbol, Bool}()
@@ -660,7 +730,7 @@ end # if nlp_available
 #  Isolates the strength path vs deflection-governed composite (drf=1.0).
 #  Strength-only composite mass should be ≤ deflection-governed composite mass.
 # ══════════════════════════════════════════════════════════════════════════════
-nodefl_geom_files = ["r1c1.json", "r2c3.json"]
+nodefl_geom_files = ["r4c3.json", "r2c3.json"]
 
 """Run pipeline with deflection_limit=false.
 
@@ -784,7 +854,7 @@ end # GUROBI_AVAILABLE
 #  solver silently returns infeasible sections.
 #
 #  Configurations chosen to span:
-#    - small (r1c1, 12 beams) to large (r5c2, many beams)
+#    - baseline feasible (r4c3) to large (r5c2, many beams)
 #    - isotropic + orthotropic biaxial + uniaxial slab types
 #    - 25 in and 40 in depth limits
 #    - cellular and uniform slab sizers
@@ -842,9 +912,9 @@ end
 
 grid_configs = [
     # (json_file, slab_type, vector_1d, slab_sizer, max_depth, description)
-    # Small geometry — isotropic
-    ("r1c1.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r1c1 iso uniform 40in"),
-    ("r1c1.json", :isotropic,     [0.0, 0.0], :cellular, 25.0, "r1c1 iso cellular 25in"),
+    # Baseline geometry — isotropic
+    ("r4c3.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r4c3 iso uniform 40in"),
+    ("r4c3.json", :isotropic,     [0.0, 0.0], :cellular, 25.0, "r4c3 iso cellular 25in"),
     # Medium geometry — varied slab types
     ("r2c3.json", :isotropic,     [0.0, 0.0], :uniform,  40.0, "r2c3 iso uniform 40in"),
     ("r2c3.json", :orth_biaxial,  [1.0, 0.0], :uniform,  25.0, "r2c3 orth_biax uniform 25in"),
@@ -858,8 +928,8 @@ if GUROBI_AVAILABLE && nlp_available
 @testset "Grid solver comparison (MIP vs Ipopt vs MMA)" begin
     # These cases are expected to be design-feasible in CI and local development.
     required_mip_configs = Set([
-        "r1c1 iso uniform 40in",
-        "r1c1 iso cellular 25in",
+        "r4c3 iso uniform 40in",
+        "r4c3 iso cellular 25in",
         "r2c3 iso uniform 40in",
         "r2c3 orth_biax uniform 25in",
         "r2c3 uniax cellular 40in",

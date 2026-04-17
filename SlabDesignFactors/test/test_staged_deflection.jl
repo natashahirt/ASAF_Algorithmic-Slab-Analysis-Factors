@@ -137,4 +137,63 @@ using Test
     end
 end
 
+@testset "Staged deflection — group ratchet helpers" begin
+    @testset "group floor requirements expand to full collinear group" begin
+        beam_to_leader, group_members = _collinear_group_maps([10, 10, 20, 30, 30], 5)
+
+        @test beam_to_leader == [1, 1, 3, 4, 4]
+        @test group_members[1] == [1, 2]
+        @test group_members[3] == [3]
+        @test group_members[4] == [4, 5]
+
+        expanded = _expand_group_floor_requirements(
+            Dict(2 => 120.0, 4 => 80.0, 5 => 95.0),
+            beam_to_leader,
+            group_members,
+        )
+
+        @test expanded[1] == 120.0
+        @test expanded[2] == 120.0
+        @test !haskey(expanded, 3)
+        @test expanded[4] == 95.0
+        @test expanded[5] == 95.0
+    end
+
+    @testset "cycling hysteresis preserves incumbent group stiffness" begin
+        beam_to_leader, group_members = _collinear_group_maps([1, 1, 2], 3)
+        params = SlabSizingParams(composite_action=false)
+        params.min_Ix_comp[1] = 50.0
+
+        minimizers = [
+            [10.0, 6.0, 0.4, 0.5],
+            [10.0, 6.0, 0.4, 0.5],
+            [8.0, 5.0, 0.3, 0.4],
+        ]
+        bare_Ix = [Ix_I_symm(v...) for v in minimizers]
+
+        target_Ix_comp = _expand_group_floor_requirements(
+            Dict(2 => 120.0),
+            beam_to_leader,
+            group_members,
+        )
+        target_Ix_bare = Dict(3 => 40.0)
+
+        locked = _apply_group_hysteresis!(
+            target_Ix_comp,
+            target_Ix_bare,
+            params,
+            minimizers,
+            beam_to_leader,
+            group_members,
+        )
+
+        @test locked == 3
+        @test target_Ix_comp[1] == bare_Ix[1]
+        @test target_Ix_comp[2] == bare_Ix[2]
+        @test target_Ix_bare[1] == bare_Ix[1]
+        @test target_Ix_bare[2] == bare_Ix[2]
+        @test target_Ix_bare[3] == bare_Ix[3]
+    end
+end
+
 println("All staged deflection tests passed.")

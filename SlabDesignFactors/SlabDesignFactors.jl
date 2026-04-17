@@ -11,6 +11,10 @@ end
 
 using Revise
 
+# Load Tables.jl before Asap/DataFrames so `Tables` binds once; avoids
+# DataFrames/Tables name clashes with transitive imports.
+using Tables
+
 # Load necessary packages for structural analysis and optimization
 using Asap, AsapToolkit, AsapOptim
 if !_SLAB_SKIP_MAKIE

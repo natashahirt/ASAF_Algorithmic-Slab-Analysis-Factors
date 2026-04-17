@@ -15,7 +15,8 @@ Notes
   these sweeps.
 - `slab_dead_load` is left at `0.0` so slab self-weight follows material density
   when applicable.
-- `composite_action`, `collinear`, and `deflection_reduction_factor` match the
+- `composite_action`, `collinear`, `staged_deflection_limit`, and
+  `deflection_reduction_factor` match the
   analyze → `optimal_beamsizer` → `postprocess_slab` pipeline exercised by
   `SlabDesignFactors/test/run.jl` (integration tests) and the cluster strip-resolution /
   NLP-comparison studies: composite stiffness, staged load decomposition in
@@ -31,6 +32,7 @@ const FULL_SWEEP_STRIP_SPACING = 0.01  # `SlabAnalysisParams.spacing` [m]
 
 const FULL_SWEEP_COMPOSITE_ACTION = true
 const FULL_SWEEP_COLLINEAR = true
+const FULL_SWEEP_STAGED_DEFLECTION_LIMIT = true
 const FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR = 1.0
 
 const FULL_SWEEP_CODE_VERSION = "2025-03-25-v4"
@@ -43,6 +45,7 @@ const FULL_SWEEP_CONFIG_HASH = let
     h = hash(FULL_SWEEP_SERVICEABILITY_LIM, h)
     h = hash(FULL_SWEEP_COMPOSITE_ACTION, h)
     h = hash(FULL_SWEEP_COLLINEAR, h)
+    h = hash(FULL_SWEEP_STAGED_DEFLECTION_LIMIT, h)
     h = hash(FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR, h)
     h = hash(ECC_FIREPROOFING, h)
     h = hash(FULL_SWEEP_CODE_VERSION, h)

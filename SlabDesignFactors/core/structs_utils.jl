@@ -61,6 +61,7 @@ function reset_SlabSizingParams(self::SlabSizingParams)
         max_depth=self.max_depth,
         max_assembly_depth=self.max_assembly_depth,
         deflection_limit=self.deflection_limit,
+        staged_deflection_limit=self.staged_deflection_limit,
         minimum_continuous=self.minimum_continuous,
         collinear=self.collinear,
         beam_units=self.beam_units,

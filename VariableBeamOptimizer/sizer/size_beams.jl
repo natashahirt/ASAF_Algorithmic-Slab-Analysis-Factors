@@ -8,6 +8,123 @@ function optimal_beamsizer!(self::SlabAnalysisParams, params::SlabSizingParams; 
     return optimal_beamsizer(self, params, initial_vars=initial_vars)
 end
 
+function _collinear_group_maps(groups::Vector{Int}, n_beams::Int)
+    beam_to_leader = collect(1:n_beams)
+    group_members = Dict{Int, Vector{Int}}()
+
+    if length(groups) == n_beams && !isempty(groups)
+        for gid in unique(groups)
+            members = findall(==(gid), groups)
+            isempty(members) && continue
+            leader = members[1]
+            group_members[leader] = members
+            for m in members
+                beam_to_leader[m] = leader
+            end
+        end
+    end
+
+    for i in 1:n_beams
+        leader = beam_to_leader[i]
+        if !haskey(group_members, leader)
+            group_members[leader] = [i]
+        end
+    end
+
+    return beam_to_leader, group_members
+end
+
+function _expand_group_floor_requirements(ix_dict::Dict{Int,Float64},
+                                          beam_to_leader::Vector{Int},
+                                          group_members::Dict{Int, Vector{Int}})
+    expanded = Dict{Int,Float64}()
+    isempty(ix_dict) && return expanded
+
+    leader_targets = Dict{Int,Float64}()
+    for (i, val) in ix_dict
+        leader = beam_to_leader[i]
+        leader_targets[leader] = max(get(leader_targets, leader, 0.0), val)
+    end
+
+    for (leader, val) in leader_targets
+        for m in group_members[leader]
+            expanded[m] = val
+        end
+    end
+
+    return expanded
+end
+
+function _current_section_stiffnesses(params::SlabSizingParams,
+                                      minimizers::Vector{Vector{Float64}})
+    n_beams = length(minimizers)
+    bare_Ix = [Ix_I_symm(minimizers[i]...) for i in 1:n_beams]
+    comp_Ix = copy(bare_Ix)
+    n_beams == 0 && return bare_Ix, comp_Ix
+
+    if !(params.composite_action && params.slab_depth_in > 0)
+        return bare_Ix, comp_Ix
+    end
+
+    beam_elements = params.model.elements[:beam]
+    beam_ids = [get_element_id(be) for be in beam_elements]
+
+    for i in 1:n_beams
+        L_beam = beam_elements[i].length
+        element_loads_i = params.load_dictionary[beam_ids[i]]
+        positions_i = Float64[]
+        widths_i = Float64[]
+        for ld in element_loads_i
+            if hasproperty(ld, :loadID)
+                row = findfirst(==(getproperty(ld, :loadID)), params.load_df.loadID)
+                if !isnothing(row)
+                    push!(positions_i, ld.position)
+                    push!(widths_i, params.load_df[row, :trib_width])
+                end
+            end
+        end
+        if !isempty(widths_i)
+            is_perim = i in params.i_perimeter
+            comp_Ix[i] = get_I_composite_effective(
+                minimizers[i][1], minimizers[i][2], minimizers[i][3], minimizers[i][4],
+                params.slab_depth_in, steel_ksi.E, params.E_c,
+                L_beam, positions_i, widths_i; is_perimeter=is_perim)
+        end
+    end
+
+    return bare_Ix, comp_Ix
+end
+
+function _apply_group_hysteresis!(target_Ix_comp::Dict{Int,Float64},
+                                  target_Ix_bare::Dict{Int,Float64},
+                                  params::SlabSizingParams,
+                                  minimizers::Vector{Vector{Float64}},
+                                  beam_to_leader::Vector{Int},
+                                  group_members::Dict{Int, Vector{Int}})
+    isempty(minimizers) && return 0
+
+    activated_leaders = Set{Int}()
+    for dict in (target_Ix_comp, target_Ix_bare, params.min_Ix_comp, params.min_Ix_bare)
+        for (i, val) in dict
+            val > 0 || continue
+            push!(activated_leaders, beam_to_leader[i])
+        end
+    end
+    isempty(activated_leaders) && return 0
+
+    bare_Ix, comp_Ix = _current_section_stiffnesses(params, minimizers)
+    n_locked = 0
+    for leader in activated_leaders
+        for m in group_members[leader]
+            target_Ix_comp[m] = max(get(target_Ix_comp, m, 0.0), comp_Ix[m])
+            target_Ix_bare[m] = max(get(target_Ix_bare, m, 0.0), bare_Ix[m])
+            n_locked += 1
+        end
+    end
+
+    return n_locked
+end
+
 """
     optimal_beamsizer(self, params; initial_vars, max_staged_iters)
 
@@ -61,6 +178,7 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
 
     has_staged = params.composite_action &&
                  params.deflection_limit &&
+                 params.staged_deflection_limit &&
                  :unfactored_w_live in propertynames(params.load_df)
 
     # ── MIP pass for NLP: run discrete sizing to get global demands ─────
@@ -95,6 +213,7 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
     viol_history = Int[]
     cycling      = false
     final_n_viol = 0
+    beam_to_leader, group_members = _collinear_group_maps(params.collinear_groups, length(params.model.elements[:beam]))
 
     for staged_iter in 1:max_staged_iters
 
@@ -192,16 +311,41 @@ function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
 
         println("Staged deflection: $n_viol beam(s) violate limits — updating Ix floors (iter $staged_iter)$(cycling ? " [ratchet]" : "")...")
 
-        α = 0.7
-        overshoot = cycling ? 1.1 : 1.0
+        target_Ix_comp = params.collinear ?
+            _expand_group_floor_requirements(new_Ix_comp, beam_to_leader, group_members) :
+            new_Ix_comp
+        target_Ix_bare = params.collinear ?
+            _expand_group_floor_requirements(new_Ix_bare, beam_to_leader, group_members) :
+            new_Ix_bare
 
-        for (i, val) in new_Ix_comp
+        locked_members = 0
+        if cycling
+            locked_members = _apply_group_hysteresis!(
+                target_Ix_comp,
+                target_Ix_bare,
+                params,
+                params.minimizers,
+                beam_to_leader,
+                group_members,
+            )
+        end
+
+        α = cycling ? 1.0 : 0.7
+        overshoot = cycling ? 1.15 : 1.0
+
+        if params.collinear
+            touched_groups = length(unique(beam_to_leader[i] for i in union(keys(target_Ix_comp), keys(target_Ix_bare))))
+            touched_groups > 0 && println("  Group ratchet: tightened $touched_groups collinear group(s).")
+        end
+        cycling && locked_members > 0 && println("  Hysteresis: locked $locked_members beam(s) to incumbent stiffness floors.")
+
+        for (i, val) in target_Ix_comp
             target = val * overshoot
             old = get(params.min_Ix_comp, i, 0.0)
             blended = old + α * (target - old)
             params.min_Ix_comp[i] = max(old, blended)
         end
-        for (i, val) in new_Ix_bare
+        for (i, val) in target_Ix_bare
             target = val * overshoot
             old = get(params.min_Ix_bare, i, 0.0)
             blended = old + α * (target - old)
@@ -244,35 +388,9 @@ function _verify_staged_deflection(params::SlabSizingParams)
 
     # Compute fresh section properties from minimizers
     sec_A   = [A_I_symm(minimizers[i]...)  for i in 1:n_beams]
-    bare_Ix = [Ix_I_symm(minimizers[i]...) for i in 1:n_beams]
+    bare_Ix, comp_Ix = _current_section_stiffnesses(params, minimizers)
     sec_Iy  = [Iy_I_symm(minimizers[i]...) for i in 1:n_beams]
     sec_J   = [J_I_symm(minimizers[i]...)  for i in 1:n_beams]
-
-    comp_Ix  = copy(bare_Ix)
-    if params.composite_action && params.slab_depth_in > 0
-        for i in 1:n_beams
-            L_beam = beam_elements[i].length
-            element_loads_i = params.load_dictionary[beam_ids[i]]
-            positions_i = Float64[]
-            widths_i = Float64[]
-            for ld in element_loads_i
-                if hasproperty(ld, :loadID)
-                    row = findfirst(==(getproperty(ld, :loadID)), params.load_df.loadID)
-                    if !isnothing(row)
-                        push!(positions_i, ld.position)
-                        push!(widths_i, params.load_df[row, :trib_width])
-                    end
-                end
-            end
-            if !isempty(widths_i)
-                is_perim = i in params.i_perimeter
-                comp_Ix[i] = get_I_composite_effective(
-                    minimizers[i][1], minimizers[i][2], minimizers[i][3], minimizers[i][4],
-                    params.slab_depth_in, E_steel, params.E_c,
-                    L_beam, positions_i, widths_i; is_perimeter=is_perim)
-            end
-        end
-    end
 
     # Set bare-steel sections for Solve A (fresh A, Iy, J from minimizers)
     for i in 1:n_beams
@@ -586,6 +704,37 @@ result is passed to the NLP via `mip_result`, so the MIP only runs once.
 Returns a 4-tuple of `SlabOptimResults` for backward compatibility with CSV
 consumers that key on `(beam_sizer, collinear)`.
 """
+function _analysis_failure_results(
+    analysis_params::SlabAnalysisParams,
+    sizing_params::SlabSizingParams,
+    results_tuple,
+    solver_status::String,
+    diagnostic_flag::String,
+    diagnostic_message::String,
+)
+    span_ok = solver_status != "MAX_SPAN_EXCEEDED"
+    for result in results_tuple
+        result.slab_name = analysis_params.slab_name
+        result.slab_type = analysis_params.slab_type
+        result.vector_1d = analysis_params.vector_1d
+        result.slab_sizer = analysis_params.slab_sizer
+        result.max_depth = sizing_params.max_depth
+        result.geometry_file = analysis_params.slab_name
+        result.span_ok = span_ok
+        result.result_ok = false
+        result.strength_ok = false
+        result.serviceability_ok = false
+        result.column_ok = false
+        result.solver_status = solver_status
+        result.diagnostic_flags = "result_not_ok;$diagnostic_flag"
+        result.diagnostic_messages = diagnostic_message
+    end
+    return results_tuple
+end
+
+_is_max_span_error_message(message::AbstractString) =
+    occursin("exceeds the recommended maximum span", message)
+
 function iterate_discrete_continuous(analysis_params::SlabAnalysisParams, sizing_params::SlabSizingParams)
 
     slab_results_discrete_noncollinear, slab_results_discrete_collinear,
@@ -595,8 +744,40 @@ function iterate_discrete_continuous(analysis_params::SlabAnalysisParams, sizing
     try
         analysis_params = analyze_slab(analysis_params)
     catch e
+        diagnostic_message = sprint(showerror, e)
+        if _is_max_span_error_message(diagnostic_message)
+            @warn "Slab analysis failed: maximum span exceeded" exception=e
+            _analysis_failure_results(
+                analysis_params,
+                sizing_params,
+                (
+                    slab_results_discrete_noncollinear,
+                    slab_results_discrete_collinear,
+                    slab_results_continuous_noncollinear,
+                    slab_results_continuous_collinear,
+                ),
+                "MAX_SPAN_EXCEEDED",
+                "max_span_exceeded",
+                diagnostic_message,
+            )
+            return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
+                   slab_results_continuous_noncollinear, slab_results_continuous_collinear
+        end
         if e isa AssertionError
             @warn "Slab analysis failed with AssertionError; returning blank results" exception=e
+            _analysis_failure_results(
+                analysis_params,
+                sizing_params,
+                (
+                    slab_results_discrete_noncollinear,
+                    slab_results_discrete_collinear,
+                    slab_results_continuous_noncollinear,
+                    slab_results_continuous_collinear,
+                ),
+                "ANALYSIS_ASSERTION_FAIL",
+                "analysis_assertion_fail",
+                diagnostic_message,
+            )
             return slab_results_discrete_noncollinear, slab_results_discrete_collinear,
                    slab_results_continuous_noncollinear, slab_results_continuous_collinear
         else

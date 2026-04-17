@@ -32,6 +32,7 @@ using Test
         @test r.staged_n_violations == 0
         @test r.nlp_solver == ""
         @test r.deflection_limit == true
+        @test r.staged_deflection_limit == true
     end
 
     @testset "keyword construction" begin

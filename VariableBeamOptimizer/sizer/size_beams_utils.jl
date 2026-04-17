@@ -62,6 +62,7 @@ function get_deflection_constraint(beam_params::FrameOptParams, beam_length::Rea
     #         scales with the total).
     # f_live: fraction that is live load alone (governs L/360).
     has_staged = use_composite &&
+                 params.staged_deflection_limit &&
                  :unfactored_w_live in propertynames(params.load_df)
 
     f_dead = 1.0

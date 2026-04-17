@@ -2,7 +2,7 @@
 
 julia_version = "1.10.4"
 manifest_format = "2.0"
-project_hash = "a11e3e89fa1dbd3d453074efbe0add7a8ab5a461"
+project_hash = "a10c87943fb2663ac04de53b0472fe6c536f01c8"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -171,13 +171,13 @@ version = "0.2.2"
 
 [[deps.AsapOptim]]
 deps = ["Asap", "ChainRulesCore", "LinearAlgebra", "LinearSolve", "Nonconvex", "NonconvexIpopt", "NonconvexNLopt", "SparseArrays", "Zygote"]
-path = "AsapOptim"
+path = "/orcd/home/002/nhirt/2024_Slab-Design-Factors/AsapOptim"
 uuid = "d81720e7-9d76-4c66-a69e-8f07ca321cc4"
 version = "0.1.0"
 
 [[deps.AsapToolkit]]
 deps = ["Asap", "Interpolations", "JSON", "LinearAlgebra", "Reexport", "SparseArrays", "Statistics", "XLSX"]
-path = "AsapToolkit"
+path = "/orcd/home/002/nhirt/2024_Slab-Design-Factors/AsapToolkit"
 uuid = "45845293-de45-4074-bf34-b603320deb79"
 version = "0.1.0"
 
@@ -1846,9 +1846,9 @@ version = "0.3.3"
 
 [[deps.OpenEXR_jll]]
 deps = ["Artifacts", "Imath_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
-git-tree-sha1 = "df9b7c88c2e7a2e77146223c526bf9e236d5f450"
+git-tree-sha1 = "135492b7e97fc86d9b132b96a54d2d3dd3e0c6a8"
 uuid = "18a262bb-aa17-5467-a713-aee519bc75cb"
-version = "3.4.4+0"
+version = "3.4.8+0"
 
 [[deps.OpenJpeg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libtiff_jll", "LittleCMS_jll", "libpng_jll"]
@@ -2545,9 +2545,9 @@ version = "0.4.4"
 
 [[deps.StructArrays]]
 deps = ["ConstructionBase", "DataAPI", "Tables"]
-git-tree-sha1 = "a2c37d815bf00575332b7bd0389f771cb7987214"
+git-tree-sha1 = "ad8002667372439f2e3611cfd14097e03fa4bccd"
 uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
-version = "0.7.2"
+version = "0.7.3"
 weakdeps = ["Adapt", "GPUArraysCore", "KernelAbstractions", "LinearAlgebra", "SparseArrays", "StaticArrays"]
 
     [deps.StructArrays.extensions]

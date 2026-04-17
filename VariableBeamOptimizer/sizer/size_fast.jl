@@ -444,7 +444,10 @@ function process_discrete_beams_integer(params::SlabSizingParams)
     ρ_steel = steel_ksi.ρ  # kip/in³
 
     has_staged = :unfactored_w_live in propertynames(params.load_df)
-    use_staged_mip = params.deflection_limit && has_staged && params.composite_action
+    use_staged_mip = params.deflection_limit &&
+        params.staged_deflection_limit &&
+        has_staged &&
+        params.composite_action
 
     # ── legacy (non-staged) deflection requirements ───────────────────────
     Ix_base_req = Dict{Int, Float64}()
@@ -812,7 +815,9 @@ function _process_continuous_beams_parallel_legacy(params::SlabSizingParams;
         local use_staged_cont
         if params.deflection_limit
             has_staged_cont = :unfactored_w_live in propertynames(params.load_df)
-            use_staged_cont = has_staged_cont && params.composite_action
+            use_staged_cont = has_staged_cont &&
+                params.composite_action &&
+                params.staged_deflection_limit
 
             if use_staged_cont
                 E_s = steel_ksi.E
@@ -1157,6 +1162,7 @@ function _process_continuous_beams_parallel_legacy(params::SlabSizingParams;
     strength_fail_limit = 1.02
 
     has_staged_final = params.deflection_limit &&
+        params.staged_deflection_limit &&
         params.composite_action &&
         (:unfactored_w_live in propertynames(params.load_df))
 
@@ -1592,6 +1598,7 @@ function process_continuous_per_beam(params::SlabSizingParams;
     #   Legacy         — non-staged bare-Ix requirement (when staged loads absent)
 
     use_staged = params.deflection_limit &&
+        params.staged_deflection_limit &&
         params.composite_action &&
         (:unfactored_w_live in propertynames(params.load_df))
 

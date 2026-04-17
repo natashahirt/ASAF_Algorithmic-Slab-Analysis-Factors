@@ -132,6 +132,7 @@ mutable struct SlabSizingParams
     # default input values
     max_assembly_depth::Bool         # Whether there is a maximum assembly depth
     deflection_limit::Bool            # Whether to apply deflection limits
+    staged_deflection_limit::Bool     # Whether to apply staged L/360 + L/240 checks when staged loads are available
     minimum_continuous::Bool         # Whether there is a minimum optimization value
     collinear::Union{Bool,Nothing}   # True if collinear members are sized together
     drawn::Bool                      # True if the model has been drawn
@@ -207,6 +208,7 @@ mutable struct SlabSizingParams
         # default input values
         max_assembly_depth::Bool=true,        # Whether there is a maximum assembly depth
         deflection_limit::Bool=true,          # Whether to apply deflection limits
+        staged_deflection_limit::Bool=true,   # Whether to apply staged L/360 + L/240 checks when staged loads are available
         minimum_continuous::Bool=true,        # Whether there is a minimum optimization value
         collinear::Union{Bool,Nothing}=false, # True if collinear members are sized together
         drawn::Bool=false,
@@ -273,7 +275,7 @@ mutable struct SlabSizingParams
         drf = composite_action ? 1.0 : deflection_reduction_factor
 
         new(model, live_load, superimposed_dead_load, slab_dead_load, façade_load, live_factor, dead_factor, beam_sizer, nlp_solver, max_depth,
-            beam_units, max_assembly_depth, deflection_limit, minimum_continuous, collinear, drawn, element_ids,
+            beam_units, max_assembly_depth, deflection_limit, staged_deflection_limit, minimum_continuous, collinear, drawn, element_ids,
             serviceability_lim, catalog_discrete, n_max_sections, area, w, self_weight, max_beam_depth, M_maxs, V_maxs,
             x_maxs, load_dictionary, load_df, minimizers, minimums, ids, collinear_minimizers, collinear_ids,
             collinear_minimums, collinear_groups, composite_action, E_c, slab_depth_in, drf, i_perimeter,
@@ -315,6 +317,7 @@ Sizer exit state (from `optimal_beamsizer` outer staged-deflection loop):
 | `composite_action`    | Whether composite stiffness was used in sizing     |
 | `staged_converged`    | `true` if staged Ix loop converged (or N/A)        |
 | `staged_n_violations` | Beams still violating staged limits at exit        |
+| `staged_ok`          | Convenience summary: staged loop exited cleanly    |
 """
 @kwdef mutable struct SlabOptimResults <: AbstractOptParams
     slab_name::String                          = ""
@@ -391,17 +394,20 @@ Sizer exit state (from `optimal_beamsizer` outer staged-deflection loop):
     # --- Optimizer / serviceability flags (from `SlabSizingParams`) ---
     nlp_solver::String                         = ""   # `"MIP"` for discrete; else e.g. `"MMA"`, `"Ipopt"`
     deflection_limit::Bool                     = true
+    staged_deflection_limit::Bool              = true
 
     # --- Sizer staged-deflection loop (see `optimal_beamsizer`) ---
     composite_action::Bool                     = false
     staged_converged::Bool                     = true
     staged_n_violations::Int                   = 0
+    staged_ok::Bool                            = true
 
     # --- Config versioning (for resume-logic staleness detection) ---
     config_hash::String                        = ""
 
     # --- Run diagnostics (for CSV reporting / filtering) ---
     geometry_file::String                      = ""
+    span_ok::Bool                              = false
     result_ok::Bool                            = false
     strength_ok::Bool                          = false
     serviceability_ok::Bool                    = false

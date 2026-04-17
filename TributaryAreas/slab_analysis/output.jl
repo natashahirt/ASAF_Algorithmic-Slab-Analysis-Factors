@@ -197,10 +197,12 @@ information as `print_mass_and_carbon_summary` / the per-beam table. The canonic
 pipeline and assertions live in `SlabDesignFactors/test/run.jl` → `test/runtests.jl`
 (integration tests on real topologies).
 
-When `result_ok` is false (strength, serviceability, or column checks failed), design
-quantities (masses, sections, utilizations, deflection strings) are written as zeros and
-empty arrays so downstream CSV consumers are not misled; identity fields, `solver_status`,
-and diagnostics still reflect the run.
+When `result_ok` is false (span, strength, no-solution, or column hard checks failed),
+design quantities (masses, sections, utilizations, deflection strings) are written as
+zeros and empty arrays so downstream CSV consumers are not misled; identity fields,
+`solver_status`, and diagnostics still reflect the run. Serviceability warnings remain
+exportable so downstream consumers can filter on `serviceability_ok` without losing the
+computed design.
 """
 function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbose::Bool)
     df = DataFrame(
@@ -217,6 +219,7 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         beam_sizer=String[], 
         nlp_solver=String[],
         deflection_limit=Bool[],
+        staged_deflection_limit=Bool[],
         collinear=Bool[], 
         vector_1d_x=Float64[], 
         vector_1d_y=Float64[], 
@@ -238,6 +241,7 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         composite_action=Bool[],
         staged_converged=Bool[],
         staged_n_violations=Int[],
+        staged_ok=Bool[],
         n_L360_fail=Int[],
         n_L240_fail=Int[],
         i_L360_fail=String[],
@@ -249,6 +253,7 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         max_util_V=Float64[],
         max_col_util=Float64[],
         geometry_file=String[],
+        span_ok=Bool[],
         result_ok=Bool[],
         strength_ok=Bool[],
         serviceability_ok=Bool[],
@@ -270,14 +275,14 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         if area == 0
             push!(df, [name, 0., 0., 0., 0., 0., 0., results.max_depth,
                        String(results.slab_type), String(results.slab_sizer), String(results.beam_sizer),
-                       results.nlp_solver, results.deflection_limit,
+                       results.nlp_solver, results.deflection_limit, results.staged_deflection_limit,
                        results.collinear, results.vector_1d[1], results.vector_1d[2],
                        empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
                        empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
                        empty_arr, empty_arr,
-                       false, true, 0, 0, 0, empty_arr, empty_arr,
+                       false, true, 0, false, 0, 0, empty_arr, empty_arr,
                        0.0, 0.0, true, 0.0, 0.0, 0.0,
-                       results.geometry_file, false, false, false, false,
+                       results.geometry_file, false, false, false, false, false,
                        "NO_GEOMETRY", "no_slab_area;result_not_ok", "No slab area; result is not design-feasible.",
                        results.config_hash])
             continue
@@ -288,15 +293,15 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
         if !results.result_ok
             push!(df, [name, area, 0., 0., 0., 0., 0., results.max_depth,
                        String(results.slab_type), String(results.slab_sizer), String(results.beam_sizer),
-                       results.nlp_solver, results.deflection_limit,
+                       results.nlp_solver, results.deflection_limit, results.staged_deflection_limit,
                        results.collinear, results.vector_1d[1], results.vector_1d[2],
                        empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
                        empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr, empty_arr,
                        empty_arr, empty_arr,
                        results.composite_action, results.staged_converged, results.staged_n_violations,
-                       0, 0, empty_arr, empty_arr,
+                       results.staged_ok, 0, 0, empty_arr, empty_arr,
                        0.0, results.max_bay_span, false, 0.0, 0.0, 0.0,
-                       results.geometry_file, results.result_ok, results.strength_ok,
+                       results.geometry_file, results.span_ok, results.result_ok, results.strength_ok,
                        results.serviceability_ok, results.column_ok, results.solver_status,
                        results.diagnostic_flags, results.diagnostic_messages,
                        results.config_hash])
@@ -322,7 +327,7 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                    results.norm_mass_slab, results.norm_mass_rebar, results.norm_mass_fireproofing,
                    results.max_depth,
                    String(results.slab_type), String(results.slab_sizer), String(results.beam_sizer),
-                   results.nlp_solver, results.deflection_limit,
+                   results.nlp_solver, results.deflection_limit, results.staged_deflection_limit,
                    results.collinear, results.vector_1d[1], results.vector_1d[2],
                    string_sections, string_ids,
                    string_col_sections, string_col_Pu, string_col_ϕPn, string_col_util,
@@ -331,11 +336,11 @@ function create_results_dataframe(results_list::Vector{SlabOptimResults}, verbos
                    _bool(results.δ_live_ok), _bool(results.δ_total_ok),
                    _mm(results.Δ_limit_live), _mm(results.Δ_limit_total),
                    results.composite_action, results.staged_converged, results.staged_n_violations,
-                   results.n_L360_fail, results.n_L240_fail,
+                   results.staged_ok, results.n_L360_fail, results.n_L240_fail,
                    _ints(results.i_L360_fail), _ints(results.i_L240_fail),
                    max_δ_tot_mm, results.max_bay_span, results.global_δ_ok,
                    results.max_util_M, results.max_util_V, results.max_col_util,
-                   results.geometry_file, results.result_ok, results.strength_ok,
+                   results.geometry_file, results.span_ok, results.result_ok, results.strength_ok,
                    results.serviceability_ok, results.column_ok, results.solver_status,
                    results.diagnostic_flags, results.diagnostic_messages,
                    results.config_hash])
@@ -359,14 +364,14 @@ function print_verbose_results(results::SlabOptimResults)
     println("  Vector: $(results.vector_1d)")
     println("  Slab sizer: $(results.slab_sizer)")
     println("  Beam sizer: $(results.beam_sizer)")
-    println("  NLP solver / MIP: $(results.nlp_solver)  deflection_limit=$(results.deflection_limit)")
+    println("  NLP solver / MIP: $(results.nlp_solver)  deflection_limit=$(results.deflection_limit)  staged_deflection_limit=$(results.staged_deflection_limit)")
     println("  collinear: $(results.collinear)")
 
     if results.area == 0.
         println("  Slab span too large.\n")
     elseif !results.result_ok
         println("  Area: $(round(results.area, digits=2)) m² — design not feasible (CSV omits design quantities).")
-        println("  Status: solver=$(results.solver_status), result_ok=$(results.result_ok), " *
+        println("  Status: solver=$(results.solver_status), span_ok=$(results.span_ok), result_ok=$(results.result_ok), " *
                 "strength_ok=$(results.strength_ok), serviceability_ok=$(results.serviceability_ok), column_ok=$(results.column_ok)")
         if results.diagnostic_flags != "none"
             println("  Diagnostics: $(results.diagnostic_flags)")
@@ -392,9 +397,10 @@ function print_verbose_results(results::SlabOptimResults)
         end
         if results.composite_action
             println("  Staged sizer: converged=$(results.staged_converged), " *
-                    "n_violations=$(results.staged_n_violations)")
+                    "n_violations=$(results.staged_n_violations), staged_ok=$(results.staged_ok)")
         end
-        println("  Status: solver=$(results.solver_status), result_ok=$(results.result_ok)")
+        println("  Status: solver=$(results.solver_status), span_ok=$(results.span_ok), result_ok=$(results.result_ok), " *
+                "serviceability_ok=$(results.serviceability_ok)")
         if results.diagnostic_flags != "none"
             println("  Diagnostics: $(results.diagnostic_flags)")
         end

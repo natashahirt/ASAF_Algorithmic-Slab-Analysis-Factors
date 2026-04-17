@@ -3,6 +3,7 @@ include("../SlabDesignFactors.jl")
 using Base.Threads
 using LinearAlgebra
 using JSON
+using Tables
 using CSV
 using DataFrames
 using .SlabDesignFactors
@@ -203,6 +204,7 @@ function run_one_config(cfg)::Union{Vector{SlabDesignFactors.SlabOptimResults}, 
             minimum_continuous=true,
             collinear=cfg.collinear,
             composite_action=SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION,
+            staged_deflection_limit=SlabDesignFactors.FULL_SWEEP_STAGED_DEFLECTION_LIMIT,
             deflection_reduction_factor=SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR,
         )
 

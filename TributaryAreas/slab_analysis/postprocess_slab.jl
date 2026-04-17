@@ -74,8 +74,13 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
             max_depth=params.max_depth,
             beam_sizer=params.beam_sizer,
             collinear=params.collinear === true,
+            deflection_limit=params.deflection_limit,
+            staged_deflection_limit=params.staged_deflection_limit,
+            composite_action=params.composite_action,
+            span_ok=false,
             result_ok=false,
             staged_converged=false,
+            staged_ok=false,
             solver_status="NO_GEOMETRY",
             diagnostic_flags="no_geometry;result_not_ok",
             diagnostic_messages="Cannot postprocess: slab_depths or areas empty.",
@@ -264,7 +269,8 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
     sec_Iy  = [fresh_secs[i].Iy for i in 1:n_beams]
     sec_J   = [fresh_secs[i].J  for i in 1:n_beams]
 
-    has_staged_loads = :unfactored_w_live in propertynames(params.load_df)
+    has_staged_loads = params.staged_deflection_limit &&
+        :unfactored_w_live in propertynames(params.load_df)
 
     if has_staged_loads && !concise
         E_steel = steel_ksi.E
@@ -399,28 +405,32 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
 
     _nlp_solver_str = params.beam_sizer == :discrete ? "MIP" : String(params.nlp_solver)
     # Match integration-test policy: warn above 1.0, fail only above 1.02.
+    _span_ok = self.area > 0
     _strength_ok = _max_util_M <= 1.02 && _max_util_V <= 1.02
     _column_ok = isempty(col_util) || _max_col_util <= 1.0 + 1e-3
+    _staged_ok = !params.deflection_limit ||
+        !params.staged_deflection_limit ||
+        (params.staged_converged && params.staged_n_violations == 0)
     _serviceability_ok = !params.deflection_limit || (
         _n_L360_fail == 0 &&
         _n_L240_fail == 0 &&
-        _global_δ_ok &&
-        params.staged_n_violations == 0
+        _staged_ok
     )
-    _result_ok = self.area > 0 &&
+    _result_ok = _span_ok &&
         !isempty(minimizers) &&
         _strength_ok &&
-        _column_ok &&
-        _serviceability_ok
+        _column_ok
 
-    _solver_status = _result_ok ? "OK" :
+    _solver_status = !_span_ok ? "NO_GEOMETRY" :
+        (_result_ok && _serviceability_ok ? "OK" :
+        (_result_ok && !_serviceability_ok ? "SERVICEABILITY_WARNING" :
         (isempty(minimizers) ? "NO_SOLUTION" :
         (!_strength_ok ? "STRENGTH_FAIL" :
-        (!_serviceability_ok ? "SERVICEABILITY_FAIL" :
-        (!_column_ok ? "COLUMN_FAIL" : "WARN"))))
+        (!_column_ok ? "COLUMN_FAIL" : "WARN")))))
 
     _diag_flags = String[]
     !_result_ok && push!(_diag_flags, "result_not_ok")
+    !_span_ok && push!(_diag_flags, "span_fail")
     !_strength_ok && push!(_diag_flags, "strength_fail")
     !_column_ok && push!(_diag_flags, "column_fail")
     !_serviceability_ok && push!(_diag_flags, "serviceability_fail")
@@ -499,10 +509,13 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
         i_L240_fail            = _i_L240_fail,
         nlp_solver             = _nlp_solver_str,
         deflection_limit       = params.deflection_limit,
+        staged_deflection_limit= params.staged_deflection_limit,
         composite_action       = params.composite_action,
         staged_converged       = params.staged_converged,
         staged_n_violations    = params.staged_n_violations,
+        staged_ok              = _staged_ok,
         geometry_file          = self.slab_name,
+        span_ok                = _span_ok,
         result_ok              = _result_ok,
         strength_ok            = _strength_ok,
         serviceability_ok      = _serviceability_ok,

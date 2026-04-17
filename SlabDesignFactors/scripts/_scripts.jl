@@ -10,6 +10,11 @@ end
 
 using Revise
 
+# Load Tables.jl before Asap/DataFrames so `Main.Tables` binds once; avoids
+# "using DataFrames.Tables ... conflicts with an existing identifier" when
+# another dependency has already imported Tables.
+using Tables
+
 # Load necessary packages for structural analysis and optimization
 using Asap, AsapToolkit, AsapOptim
 if !_SLAB_SKIP_MAKIE

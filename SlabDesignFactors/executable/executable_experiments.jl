@@ -21,6 +21,7 @@ include("../SlabDesignFactors.jl")
 using Base.Threads
 using LinearAlgebra
 using JSON
+using Tables
 using CSV
 using DataFrames
 using Statistics
@@ -45,6 +46,7 @@ const DEFAULT_VECTOR_1D   = [0.0, 0.0]
 const DEFAULT_SPACING     = SlabDesignFactors.FULL_SWEEP_STRIP_SPACING
 const DEFAULT_COMPOSITE   = SlabDesignFactors.FULL_SWEEP_COMPOSITE_ACTION
 const DEFAULT_COLLINEAR   = SlabDesignFactors.FULL_SWEEP_COLLINEAR
+const DEFAULT_STAGED_DEFL = SlabDesignFactors.FULL_SWEEP_STAGED_DEFLECTION_LIMIT
 const DEFAULT_DRF         = SlabDesignFactors.FULL_SWEEP_DEFLECTION_REDUCTION_FACTOR
 
 """Resume key for topology-based studies (loads/factors match `FULL_SWEEP_*`)."""
@@ -58,8 +60,8 @@ const BUILDING_STUDIES_CONFIG_HASH = string(hash((
 
 # Columns added to custom study CSVs (strip / NLP / material) for parity with `create_results_dataframe`.
 const STAGING_SUMMARY_COLS = [
-    :beam_sizer, :nlp_solver, :deflection_limit, :composite_action, :staged_converged,
-    :staged_n_violations, :n_L360_fail, :n_L240_fail, :global_δ_ok, :max_staged_δ_total_mm,
+    :beam_sizer, :nlp_solver, :deflection_limit, :staged_deflection_limit, :composite_action, :staged_converged,
+    :staged_n_violations, :staged_ok, :n_L360_fail, :n_L240_fail, :global_δ_ok, :max_staged_δ_total_mm,
 ]
 
 # ── Monte Carlo parameters ──────────────────────────────────────────────────
@@ -302,6 +304,7 @@ function run_max_depths(results_path::String; json_path::String=DEFAULT_TOPOLOGY
                 minimum_continuous=true,
                 collinear=DEFAULT_COLLINEAR,
                 composite_action=DEFAULT_COMPOSITE,
+                staged_deflection_limit=DEFAULT_STAGED_DEFL,
                 deflection_reduction_factor=DEFAULT_DRF,
             )
 
@@ -408,6 +411,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                 minimum_continuous=true,
                 n_max_sections=0,
                 composite_action=DEFAULT_COMPOSITE,
+                staged_deflection_limit=DEFAULT_STAGED_DEFL,
                 deflection_reduction_factor=DEFAULT_DRF,
             )
 
@@ -444,6 +448,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                     beam_sizer=String(results.beam_sizer),
                     nlp_solver=results.nlp_solver,
                     deflection_limit=results.deflection_limit,
+                    staged_deflection_limit=results.staged_deflection_limit,
                     composite_action=results.composite_action,
                     staged_converged=results.staged_converged,
                     staged_n_violations=results.staged_n_violations,
@@ -478,6 +483,7 @@ function run_strip_resolution(results_path::String; json_path::String=DEFAULT_TO
                     beam_sizer=missing,
                     nlp_solver=missing,
                     deflection_limit=missing,
+                    staged_deflection_limit=missing,
                     composite_action=missing,
                     staged_converged=missing,
                     staged_n_violations=missing,
@@ -573,6 +579,7 @@ function run_constrained_inventory(results_path::String; json_path::String=DEFAU
             minimum_continuous=true,
             n_max_sections=cfg.n_max_sections,
             composite_action=DEFAULT_COMPOSITE,
+            staged_deflection_limit=DEFAULT_STAGED_DEFL,
             deflection_reduction_factor=DEFAULT_DRF,
         )
 
@@ -686,6 +693,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
         beam_sizer_str = missing
         nlp_solver_out = missing
         deflection_limit_out = missing
+        staged_deflection_limit_out = missing
         composite_action_out = missing
         staged_converged_out = missing
         staged_n_violations_out = missing
@@ -727,6 +735,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 minimum_continuous=true,
                 collinear=DEFAULT_COLLINEAR,
                 composite_action=DEFAULT_COMPOSITE,
+                staged_deflection_limit=DEFAULT_STAGED_DEFL,
                 deflection_reduction_factor=DEFAULT_DRF,
             )
 
@@ -752,6 +761,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 beam_sizer_str = String(results.beam_sizer)
                 nlp_solver_out = results.nlp_solver
                 deflection_limit_out = results.deflection_limit
+                staged_deflection_limit_out = results.staged_deflection_limit
                 composite_action_out = results.composite_action
                 staged_converged_out = results.staged_converged
                 staged_n_violations_out = results.staged_n_violations
@@ -790,6 +800,7 @@ function run_nlp_solver_comparison(results_path::String; json_path::String=DEFAU
                 beam_sizer=beam_sizer_str,
                 nlp_solver=nlp_solver_out,
                 deflection_limit=deflection_limit_out,
+                staged_deflection_limit=staged_deflection_limit_out,
                 composite_action=composite_action_out,
                 staged_converged=staged_converged_out,
                 staged_n_violations=staged_n_violations_out,
@@ -947,6 +958,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
         beam_sizer_str = missing
         nlp_solver_out = missing
         deflection_limit_out = missing
+        staged_deflection_limit_out = missing
         composite_action_out = missing
         staged_converged_out = missing
         staged_n_violations_out = missing
@@ -984,6 +996,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
                 minimum_continuous=true,
                 collinear=DEFAULT_COLLINEAR,
                 composite_action=DEFAULT_COMPOSITE,
+                staged_deflection_limit=DEFAULT_STAGED_DEFL,
                 deflection_reduction_factor=DEFAULT_DRF,
                 E_c=scen.E_c_ksi,
                 concrete_material=scen,
@@ -997,6 +1010,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
                 beam_sizer_str = String(results.beam_sizer)
                 nlp_solver_out = results.nlp_solver
                 deflection_limit_out = results.deflection_limit
+                staged_deflection_limit_out = results.staged_deflection_limit
                 composite_action_out = results.composite_action
                 staged_converged_out = results.staged_converged
                 staged_n_violations_out = results.staged_n_violations
@@ -1108,6 +1122,7 @@ function run_material_scenario_mc(results_path::String; json_path::String=DEFAUL
                 beam_sizer=beam_sizer_str,
                 nlp_solver=nlp_solver_out,
                 deflection_limit=deflection_limit_out,
+                staged_deflection_limit=staged_deflection_limit_out,
                 composite_action=composite_action_out,
                 staged_converged=staged_converged_out,
                 staged_n_violations=staged_n_violations_out,
@@ -1208,6 +1223,7 @@ function run_validation_mip(results_path::String; json_path::String=DEFAULT_VALI
                 minimum_continuous=true,
                 n_max_sections=0,
                 composite_action=DEFAULT_COMPOSITE,
+                staged_deflection_limit=DEFAULT_STAGED_DEFL,
                 deflection_reduction_factor=DEFAULT_DRF,
             )
 

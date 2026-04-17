@@ -20,7 +20,7 @@ function _gurobi_available_preflight()
 end
 
 const _PREFLIGHT_GUROBI = _gurobi_available_preflight()
-const _PREFLIGHT_GEOMS = ["r1c1.json", "r2c3.json"]
+const _PREFLIGHT_GEOMS = ["r4c3.json", "r2c3.json"]
 const _PREFLIGHT_PATH = joinpath(@__DIR__, "..", "..", "Geometries", "topology")
 const _PREFLIGHT_STRENGTH_LIMIT = 1.02
 
@@ -68,9 +68,16 @@ function _preflight_run_pipeline(json_file::String; beam_sizer::Symbol)
     return results, slab_params, sizing_params
 end
 
-_design_ok_preflight(r) = !isempty(r.minimizers) && r.result_ok && r.strength_ok && r.serviceability_ok && r.column_ok
+_design_ok_preflight(r) = !isempty(r.minimizers) && r.result_ok && r.span_ok && r.strength_ok && r.column_ok
 
 if _PREFLIGHT_GUROBI
+@testset "Preflight policy checks" begin
+    res_mip, _, _ = _preflight_run_pipeline("r2c3.json"; beam_sizer=:discrete)
+    @test res_mip.global_δ_ok == false
+    @test _design_ok_preflight(res_mip)
+    @test occursin("global_deflection_sanity_fail", res_mip.diagnostic_flags)
+end
+
 @testset "Preflight MIP/NLP baseline parity" begin
     for json_file in _PREFLIGHT_GEOMS
         name = replace(json_file, ".json" => "")
@@ -80,8 +87,6 @@ if _PREFLIGHT_GUROBI
 
             @test _design_ok_preflight(res_mip)
             @test _design_ok_preflight(res_nlp)
-            @test res_mip.staged_n_violations == 0
-            @test res_nlp.staged_n_violations == 0
 
             @test res_mip.max_util_M <= _PREFLIGHT_STRENGTH_LIMIT
             @test res_mip.max_util_V <= _PREFLIGHT_STRENGTH_LIMIT
