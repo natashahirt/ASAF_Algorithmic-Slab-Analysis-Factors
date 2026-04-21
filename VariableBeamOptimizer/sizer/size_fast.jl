@@ -220,6 +220,7 @@ function process_discrete_beams_integer(params::SlabSizingParams)
     function _compute_staged_Ix_requirements(section_indices::Dict{Int, Int})
         Ix_live_req       = Dict{Int, Float64}()
         Ix_coupled_comp   = Dict{Int, Float64}()
+        Ix_coupled_bare   = Dict{Int, Float64}()
         sw_coeff_240      = Dict{Int, Float64}()
 
         # Solve A: slab DL on bare steel — use section props from catalogue
@@ -260,16 +261,22 @@ function process_discrete_beams_integer(params::SlabSizingParams)
             comp_Ix_used[i] = beam_elements[i].section.Ix
         end
 
-        # Derive Ix requirements per beam.
-        # L/360 (live only) is independent — only involves composite Ix.
-        # L/240 (total) is a coupled constraint: δ_dead(bare) + δ_sw + δ_sdl_live(comp) ≤ L/240.
-        # We linearize the coupled constraint by computing the dead-load fraction of L/240
-        # from the current bare-steel section, then requiring composite Ix to cover the
-        # *residual* L/240 budget (not the full L/240).
+        # Derive Ix requirements per beam using the same *proportional L/240
+        # allocation* as the continuous NLP (see lines ~850 below). Splitting
+        # lim_240 in proportion to each side's current deflection share makes
+        # both bare and composite constraints scale by the same factor k =
+        # δ_total / lim_240, so the MIP cannot trade bare against composite.
+        #
+        #     δ_bare_new ≤ lim_240 · f_bare,   δ_sdl_live_new ≤ lim_240 · f_comp
+        #     f_bare = δ_bare_total_curr / δ_total_curr
+        #     f_comp = δ_sdl_live_curr   / δ_total_curr   (= 1 − f_bare)
+        #
+        # L/360 (live only) is an independent composite constraint.
         loadid_index_stg = _build_loadid_index(params)
         for i in 1:lastindex(beam_elements)
-            L_beam = beam_elements[i].length
+            L_beam  = beam_elements[i].length
             lim_240 = L_beam / 240.0
+            lim_360 = L_beam / 360.0
 
             w_sdl_sum = 0.0; w_live_sum = 0.0
             beam_id = get_element_id(beam_elements[i])
@@ -287,19 +294,45 @@ function process_discrete_beams_integer(params::SlabSizingParams)
 
             # L/360 live — independent, composite only
             δ_live_i = δ_sdl_live_comp[i] * f_live_i
-            Ix_live_req[i] = δ_live_i > 0 ? comp_Ix_used[i] * δ_live_i / (L_beam / 360.0) : 0.0
+            Ix_live_req[i] = δ_live_i > 0 ? comp_Ix_used[i] * δ_live_i / lim_360 : 0.0
 
-            # Coupled L/240: dead-load portion from the current seed section
-            # consumes part of the budget; SDL+LL must fit in the residual.
+            # Self-weight deflection at the current seed section
             j_sel = section_indices[i]
-            δ_sw_i = 5 * ρ_steel * catalogue_df.A[j_sel] * L_beam^4 / (384 * E_s * bare_Ix_used[i])
-            δ_dead_total_i = δ_dead_bare[i] + δ_sw_i
-            residual_240 = max(lim_240 - δ_dead_total_i, lim_240 * 0.1)
+            δ_sw_i         = 5 * ρ_steel * catalogue_df.A[j_sel] * L_beam^4 /
+                             (384 * E_s * max(bare_Ix_used[i], 1e-12))
+            δ_bare_total_i = δ_dead_bare[i] + δ_sw_i
+            δ_total_i      = δ_bare_total_i + δ_sdl_live_comp[i]
 
-            Ix_coupled_comp[i] = δ_sdl_live_comp[i] > 0 ?
-                comp_Ix_used[i] * δ_sdl_live_comp[i] / residual_240 : 0.0
+            # Proportional L/240 allocation (always active as a floor).
+            if δ_total_i > 0 && δ_sdl_live_comp[i] > 0
+                f_bare   = δ_bare_total_i / δ_total_i
+                # Floor to keep either side from collapsing when one dominates
+                # at a degenerate seed; 10 % gives the solver room to find an
+                # interior allocation.
+                f_bare   = clamp(f_bare, 0.1, 0.9)
+                f_comp   = 1.0 - f_bare
+                lim_bare = lim_240 * f_bare
+                lim_comp = lim_240 * f_comp
 
-            sw_coeff_240[i] = 5 * 240.0 * ρ_steel * L_beam^3 / (384 * E_s)
+                # Bare: (Ix_bare − sw_c·A) ≥ δ_dead_bare · bare_Ix_curr / lim_bare
+                # (sw isolated so A can vary in the MIP section choice)
+                Ix_coupled_bare[i] = δ_dead_bare[i] * bare_Ix_used[i] / lim_bare
+                sw_coeff_240[i]    = 5 * ρ_steel * L_beam^4 /
+                                     (384 * E_s * lim_bare)
+                Ix_coupled_comp[i] = δ_sdl_live_comp[i] * comp_Ix_used[i] / lim_comp
+            else
+                # No composite-side load (e.g. no slab reaches this beam):
+                # bare-only L/240 constraint on the dead-load stage.
+                Ix_coupled_comp[i] = 0.0
+                if δ_dead_bare[i] > 0
+                    Ix_coupled_bare[i] = δ_dead_bare[i] * bare_Ix_used[i] / lim_240
+                    sw_coeff_240[i]    = 5 * ρ_steel * L_beam^4 /
+                                         (384 * E_s * lim_240)
+                else
+                    Ix_coupled_bare[i] = 0.0
+                    sw_coeff_240[i]    = 0.0
+                end
+            end
         end
 
         # Restore factored loads
@@ -307,7 +340,7 @@ function process_discrete_beams_integer(params::SlabSizingParams)
         params.load_dictionary = get_load_dictionary_by_id(params.model)
         Asap.solve!(params.model, reprocess=true)
 
-        return Ix_live_req, Ix_coupled_comp, sw_coeff_240
+        return Ix_live_req, Ix_coupled_comp, Ix_coupled_bare, sw_coeff_240
     end
 
     # ── legacy (non-staged) deflection requirements ───────────────────────
@@ -316,21 +349,27 @@ function process_discrete_beams_integer(params::SlabSizingParams)
 
     Ix_live_req       = Dict{Int, Float64}()
     Ix_coupled_comp   = Dict{Int, Float64}()
+    Ix_coupled_bare   = Dict{Int, Float64}()
     sw_coeff_240      = Dict{Int, Float64}()
 
     if params.deflection_limit
         if use_staged_mip
             # Initial pass: use lightest feasible section for each beam
             init_section_indices = Dict(i => filtered_indices[i][1] for i in 1:lastindex(beam_elements))
-            Ix_live_req, Ix_coupled_comp, sw_coeff_240 =
+            Ix_live_req, Ix_coupled_comp, Ix_coupled_bare, sw_coeff_240 =
                 _compute_staged_Ix_requirements(init_section_indices)
 
-            # Prefilter: L/360 (live) and coupled L/240 both use composite Ix
+            # Prefilter: L/360 (live) uses composite Ix; L/240 uses both sides
+            # with a proportional split (composite via effective_Ix, bare via
+            # catalogue Ix minus sw_c·A).
             tol = 1e-9
             for i in 1:lastindex(beam_elements)
                 min_comp_ix = max(Ix_live_req[i], get(Ix_coupled_comp, i, 0.0))
+                min_bare_ix = get(Ix_coupled_bare, i, 0.0)
+                sw_c        = get(sw_coeff_240, i, 0.0)
                 feasible = [j for j in filtered_indices[i] if
-                    effective_Ix[i][j] + tol >= min_comp_ix]
+                    effective_Ix[i][j] + tol >= min_comp_ix &&
+                    (catalogue_df.Ix[j] - sw_c * catalogue_df.A[j]) + tol >= min_bare_ix]
                 if isempty(feasible)
                     throw(NoValidSectionsError("No sections satisfy staged deflection constraints for beam $i."))
                 end
@@ -453,6 +492,17 @@ function process_discrete_beams_integer(params::SlabSizingParams)
                         sum(x[i,j] * effective_Ix[i][j] for j in filtered_iter[i]) >= Ix_live_req[i])
                     JuMP.@constraint(jump_model,
                         sum(x[i,j] * effective_Ix[i][j] for j in filtered_iter[i]) >= Ix_coupled_comp[i])
+                    # Bare-side L/240 (proportional split): the dead-load stage
+                    # must fit in its share of the span limit regardless of
+                    # composite stiffness. Without this, the MIP can pick a
+                    # section that passes the composite constraint but still
+                    # violates L/240 on bare steel alone.
+                    if get(Ix_coupled_bare, i, 0.0) > 0
+                        sw_c = sw_coeff_240[i]
+                        JuMP.@constraint(jump_model,
+                            sum(x[i,j] * (catalogue_df.Ix[j] - sw_c * catalogue_df.A[j])
+                                for j in filtered_iter[i]) >= Ix_coupled_bare[i])
+                    end
                 end
             else
                 for i in 1:lastindex(beam_elements)
@@ -505,7 +555,7 @@ function process_discrete_beams_integer(params::SlabSizingParams)
         end
 
         # Re-solve staged FE with chosen sections and check violations
-        Ix_live_new, Ix_coupled_new, sw_coeff_new =
+        Ix_live_new, Ix_coupled_new, Ix_bare_new, sw_coeff_new =
             _compute_staged_Ix_requirements(chosen_section_idx)
 
         n_violations = 0
@@ -513,7 +563,9 @@ function process_discrete_beams_integer(params::SlabSizingParams)
         for i in 1:lastindex(beam_elements)
             j_sel = chosen_section_idx[i]
             min_comp_needed = max(Ix_live_new[i], Ix_coupled_new[i])
-            if effective_Ix[i][j_sel] + tol < min_comp_needed
+            bare_margin = catalogue_df.Ix[j_sel] - sw_coeff_new[i] * catalogue_df.A[j_sel]
+            if effective_Ix[i][j_sel] + tol < min_comp_needed ||
+               bare_margin + tol < Ix_bare_new[i]
                 n_violations += 1
             end
         end
@@ -530,14 +582,18 @@ function process_discrete_beams_integer(params::SlabSizingParams)
         for i in 1:lastindex(beam_elements)
             Ix_live_req[i]     = Ix_live_new[i]
             Ix_coupled_comp[i] = Ix_coupled_new[i]
+            Ix_coupled_bare[i] = Ix_bare_new[i]
             sw_coeff_240[i]    = sw_coeff_new[i]
         end
 
-        # Re-prefilter with updated requirements
+        # Re-prefilter with updated requirements (both composite and bare).
         for i in 1:lastindex(beam_elements)
             min_comp_ix = max(Ix_live_req[i], Ix_coupled_comp[i])
+            min_bare_ix = get(Ix_coupled_bare, i, 0.0)
+            sw_c        = get(sw_coeff_240, i, 0.0)
             feasible = [j for j in filtered_indices[i] if
-                effective_Ix[i][j] + tol >= min_comp_ix]
+                effective_Ix[i][j] + tol >= min_comp_ix &&
+                (catalogue_df.Ix[j] - sw_c * catalogue_df.A[j]) + tol >= min_bare_ix]
             if isempty(feasible)
                 heaviest = filtered_indices[i][argmax([effective_Ix[i][j] for j in filtered_indices[i]])]
                 @warn "Beam $i: no section satisfies staged constraints; keeping heaviest feasible"
@@ -572,7 +628,7 @@ end
 
 function process_continuous_beams_parallel(params::SlabSizingParams;
                                            initial_vars::Vector=[],
-                                           max_demand_iters::Int=3,
+                                           max_demand_iters::Int=5,
                                            demand_tol::Float64=1e-3)
 
     model = params.model
@@ -755,7 +811,7 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
         #   Solve B: SDL + LL on composite steel  →  δ_sdl_live (split by load ratio)
         # Then enforce L/360 live and L/240 total.
         # Falls back to single-solve L/serviceability_lim when staged columns are absent.
-        local Ix_req_live_vec, Ix_req_total_comp_vec, Ix_req_bare_vec, sw_coeff_vec
+        local Ix_req_live_vec, Ix_req_coupled_vec, Ix_req_bare_vec, sw_coeff_vec
         local use_staged_cont
         if params.deflection_limit
             has_staged_cont = :unfactored_w_live in propertynames(params.load_df)
@@ -833,16 +889,39 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
                 params.load_dictionary = get_load_dictionary_by_id(params.model)
                 Asap.solve!(params.model, reprocess=true)
 
-                # Derive Ix requirements per beam
-                Ix_req_live_vec       = Vector{Float64}(undef, n_beams)
-                Ix_req_total_comp_vec = Vector{Float64}(undef, n_beams)
-                Ix_req_bare_vec       = Vector{Float64}(undef, n_beams)
-                sw_coeff_vec          = Vector{Float64}(undef, n_beams)
-                loadid_index_defl = _build_loadid_index(params)
+                # Derive Ix requirements per beam using a *proportional L/240
+                # allocation*. The one-sided residual-budget approach the MIP
+                # uses is not self-consistent when the NLP is free to shrink
+                # bare Ix: dead-load deflection grows and eats the composite
+                # side's budget, but the NLP sees a stale residual and declares
+                # feasibility. Instead, split lim_240 between bare and comp
+                # *proportionally* to each side's current-section contribution:
+                #
+                #     δ_bare_total_new ≤ lim_240 · f_bare,   δ_sdl_live_new ≤ lim_240 · f_comp
+                #     f_bare = δ_bare_total_curr / δ_total_curr
+                #     f_comp = δ_sdl_live_curr  / δ_total_curr  (= 1 − f_bare)
+                #
+                # Each Ix must scale by the same factor k = δ_total / lim_240, so
+                # the NLP cannot trade bare against composite. When k ≤ 1 the
+                # section already satisfies L/240 and no tightening is needed.
+                Ix_req_live_vec    = Vector{Float64}(undef, n_beams)
+                Ix_req_coupled_vec = Vector{Float64}(undef, n_beams)
+                Ix_req_bare_vec    = Vector{Float64}(undef, n_beams)
+                sw_coeff_vec       = Vector{Float64}(undef, n_beams)
+                loadid_index_defl  = _build_loadid_index(params)
 
                 for i in 1:n_beams
-                    L_beam = beam_elements[i].length
+                    L_beam  = beam_elements[i].length
+                    lim_240 = L_beam / 240.0
+                    lim_360 = L_beam / 360.0
 
+                    # Self-weight deflection at the current bare section
+                    δ_sw_i         = 5 * ρ_steel_cont * fresh_A[i] * L_beam^4 /
+                                     (384 * E_s * max(bare_Ix_used[i], 1e-12))
+                    δ_bare_total_i = δ_dead_bare[i] + δ_sw_i
+                    δ_total_i      = δ_bare_total_i + δ_sdl_live[i]
+
+                    # Live-load fraction of the unfactored post-composite load
                     w_sdl_sum = 0.0; w_live_sum = 0.0
                     beam_id = get_element_id(beam_elements[i])
                     for ld in params.load_dictionary[beam_id]
@@ -854,18 +933,49 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
                             end
                         end
                     end
-                    w_sum = w_sdl_sum + w_live_sum
+                    w_sum    = w_sdl_sum + w_live_sum
                     f_live_i = w_sum > 0 ? w_live_sum / w_sum : 0.5
 
+                    # L/360 live-only: composite Ix must cover the live-only part
                     δ_live_i = δ_sdl_live[i] * f_live_i
                     Ix_req_live_vec[i] = δ_live_i > 0 ?
-                        comp_Ix_used[i] * δ_live_i / (L_beam / 360.0) : 0.0
+                        comp_Ix_used[i] * δ_live_i / lim_360 : 0.0
 
-                    Ix_req_total_comp_vec[i] = δ_sdl_live[i] > 0 ?
-                        comp_Ix_used[i] * δ_sdl_live[i] / (L_beam / 240.0) : 0.0
-                    Ix_req_bare_vec[i] = δ_dead_bare[i] > 0 ?
-                        bare_Ix_used[i] * δ_dead_bare[i] / (L_beam / 240.0) : 0.0
-                    sw_coeff_vec[i] = 5 * 240.0 * ρ_steel_cont * L_beam^3 / (384 * E_s)
+                    # Proportional L/240 allocation is *always* active: it
+                    # acts as a floor that scales with demand. When the
+                    # current section is overkill (δ_total_curr < lim_240),
+                    # the target Ix is below the current Ix, so the NLP can
+                    # shrink down to the feasibility edge; when the section
+                    # is tight, the target pushes both bare and composite up.
+                    if δ_total_i > 0 && δ_sdl_live[i] > 0
+                        f_bare   = δ_bare_total_i / δ_total_i
+                        # Floor to keep either side from collapsing when one
+                        # dominates at a degenerate seed; 10% gives the solver
+                        # room to find an interior allocation.
+                        f_bare   = clamp(f_bare, 0.1, 0.9)
+                        f_comp   = 1.0 - f_bare
+                        lim_bare = lim_240 * f_bare
+                        lim_comp = lim_240 * f_comp
+
+                        # Bare: Ix_bare − sw_c·A ≥ δ_dead_bare·bare_Ix_curr / lim_bare
+                        # (sw isolated so A can vary at the new section)
+                        Ix_req_bare_vec[i]    = δ_dead_bare[i] * bare_Ix_used[i] / lim_bare
+                        sw_coeff_vec[i]       = 5 * ρ_steel_cont * L_beam^4 /
+                                                (384 * E_s * lim_bare)
+                        Ix_req_coupled_vec[i] = δ_sdl_live[i] * comp_Ix_used[i] / lim_comp
+                    else
+                        # No composite-side load (e.g. no slab): fall back to a
+                        # pure bare-steel L/240 constraint on dead-only.
+                        Ix_req_coupled_vec[i] = 0.0
+                        if δ_dead_bare[i] > 0
+                            Ix_req_bare_vec[i] = δ_dead_bare[i] * bare_Ix_used[i] / lim_240
+                            sw_coeff_vec[i]    = 5 * ρ_steel_cont * L_beam^4 /
+                                                 (384 * E_s * lim_240)
+                        else
+                            Ix_req_bare_vec[i] = 0.0
+                            sw_coeff_vec[i]    = 0.0
+                        end
+                    end
                 end
             else
                 # Legacy single-solve fallback (non-staged)
@@ -887,10 +997,10 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
 
                 ρ_steel_cont = steel_ksi.ρ
                 E_s = steel_ksi.E
-                Ix_req_live_vec       = zeros(n_beams)
-                Ix_req_total_comp_vec = zeros(n_beams)
-                Ix_req_bare_vec       = Vector{Float64}(undef, n_beams)
-                sw_coeff_vec          = Vector{Float64}(undef, n_beams)
+                Ix_req_live_vec    = zeros(n_beams)
+                Ix_req_coupled_vec = zeros(n_beams)
+                Ix_req_bare_vec    = Vector{Float64}(undef, n_beams)
+                sw_coeff_vec       = Vector{Float64}(undef, n_beams)
                 for i in 1:n_beams
                     L_beam = beam_elements[i].length
                     δ_unfactored = get(service_δ, i, 0.0)
@@ -980,15 +1090,18 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
             op_A_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) * beams_df.x_max[i] for i in 1:n_beams)
         )
 
-        # Fix C: prevent optimizer from exceeding warm-start objective
-        # Recompute bound each iteration using current beams_df spans so the
-        # constraint stays consistent with the JuMP objective after demand
-        # redistribution.
+        # Fix C: prevent optimizer from runaway growth past the warm-start.
+        # The MIP warm-start is a feasible discrete solution; the NLP relaxes
+        # to continuous sections and should generally improve or match it, but
+        # demand-loop drift and numerical slack can briefly push the iterate
+        # above. We cap at 10% growth to absorb this without hiding real
+        # infeasibility — any larger excess signals the NLP is finding a
+        # heavier "improvement" than the MIP, which is worth reviewing.
         if has_warm_start
             ws_obj = sum(warm_start_areas[i] * beams_df.x_max[i] for i in 1:n_beams)
             JuMP.@constraint(jump_model, sum(
                 op_A_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) * beams_df.x_max[i]
-                for i in 1:n_beams) <= ws_obj * 1.01)
+                for i in 1:n_beams) <= ws_obj * 1.10)
         end
 
         for i in 1:n_beams
@@ -1006,27 +1119,43 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
         end
 
         # ── deflection constraints ───────────────────────────────────────
-        # Staged: L/360 live (on composite Ix), L/240 total-comp (on composite Ix),
-        #         L/240 dead (on bare Ix minus self-weight deduction).
-        # Legacy: single Ix_req on effective Ix (composite or bare).
+        # Staged: three constraints per beam
+        #   (a) L/360 live  — composite Ix ≥ Ix_req_live
+        #   (b) L/240 total, composite share  — composite Ix ≥ Ix_req_coupled
+        #   (c) L/240 total, bare share       — Ix_bare − sw_c·A ≥ Ix_req_bare
+        #   (b) and (c) use a *proportional* allocation of lim_240; each side
+        #   scales by the same factor k = δ_total/lim_240, so the NLP cannot
+        #   undersize bare by overshooting composite (the failure mode that
+        #   was producing L/240-violating "feasible" solutions).
+        # Legacy: single Ix_req on effective Ix (composite via frozen ratio
+        #         or bare), net of a self-weight deduction.
         if params.deflection_limit
             if use_staged_cont
                 for i in 1:n_beams
-                    sw_c = sw_coeff_vec[i]
-                    if needs_composite_ratio && composite_ratio_vec[i] > 1.0
-                        ratio_i = composite_ratio_vec[i]
+                    sw_c    = sw_coeff_vec[i]
+                    ratio_i = (needs_composite_ratio && composite_ratio_vec[i] > 1.0) ?
+                              composite_ratio_vec[i] : 1.0
+                    # Skip trivial constraints (RHS = 0) to reduce solver stress
+                    # — especially helpful for MMA on small geometries where
+                    # deflection demands are already zero (e.g., no slab load).
+                    if Ix_req_live_vec[i] > 0
                         JuMP.@constraint(jump_model,
-                            Ix_req_live_vec[i] - ratio_i * op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
-                        JuMP.@constraint(jump_model,
-                            Ix_req_total_comp_vec[i] - ratio_i * op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
-                    else
-                        JuMP.@constraint(jump_model,
-                            Ix_req_live_vec[i] - op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
-                        JuMP.@constraint(jump_model,
-                            Ix_req_total_comp_vec[i] - op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
+                            Ix_req_live_vec[i] -
+                            ratio_i * op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
                     end
-                    JuMP.@constraint(jump_model,
-                        Ix_req_bare_vec[i] - (op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) - sw_c * op_A_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i])) <= 0)
+                    if Ix_req_coupled_vec[i] > 0
+                        JuMP.@constraint(jump_model,
+                            Ix_req_coupled_vec[i] -
+                            ratio_i * op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i]) <= 0)
+                    end
+                    # Bare-side L/240 is only active when the current section
+                    # exceeds the total limit (sw_c > 0 ⇔ Ix_req_bare > 0).
+                    if sw_c > 0 && Ix_req_bare_vec[i] > 0
+                        JuMP.@constraint(jump_model,
+                            Ix_req_bare_vec[i] -
+                            (op_Ix_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i])
+                             - sw_c * op_A_I_asymm(h[i], w[i], w[i], tw[i], tf[i], tf[i])) <= 0)
+                    end
                 end
             else
                 for i in 1:n_beams
@@ -1084,6 +1213,26 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
         # ── solve ────────────────────────────────────────────────────────
         JuMP.optimize!(jump_model)
 
+        # Guard against silent failures: abort the demand loop if the solver
+        # did not return a usable primal. LOCALLY_SOLVED and OPTIMAL are good;
+        # anything else (INFEASIBLE, ITERATION_LIMIT, ALMOST_*…) means the
+        # reported values may violate constraints. We fall back to the best
+        # solution seen in prior iterations, or report no minimizers.
+        term = JuMP.termination_status(jump_model)
+        prim = JuMP.primal_status(jump_model)
+        good = (term == JuMP.MOI.OPTIMAL || term == JuMP.MOI.LOCALLY_SOLVED) &&
+               prim == JuMP.MOI.FEASIBLE_POINT
+        if !good
+            @warn "Continuous NLP returned non-optimal status" demand_iter term prim
+            # Fall back to best_vars (initialized to the MIP warm-start
+            # before the loop). Post-processing will flag any catastrophic
+            # deflection outcomes via SERVICEABILITY_FAIL / result_ok=false,
+            # so we don't need to mark the configuration infeasible here —
+            # doing so would hide cases where MIP found a viable discrete
+            # solution that the NLP simply couldn't refine further.
+            break
+        end
+
         optimal_h = JuMP.value.(h)
         optimal_w = JuMP.value.(w)
         optimal_tw = JuMP.value.(tw)
@@ -1097,13 +1246,40 @@ function process_continuous_beams_parallel(params::SlabSizingParams;
         rel_change = abs(cur_obj - prev_obj) / max(abs(prev_obj), 1e-12)
         println("  relative change = $rel_change")
 
-        # Fix B: keep the best solution seen so far
-        if cur_obj < best_obj
+        # Fix B: keep the best mass-feasible solution seen so far. In staged
+        # mode we only accept an iterate as "best" if it also satisfies the
+        # proportional L/240 split implied by the constraint targets — i.e.
+        # δ_total ≤ lim_240 × 1.02 at the reported section. This guards the
+        # early-termination path on mass convergence from locking in an
+        # iterate that still violates deflection.
+        defl_ok = true
+        if use_staged_cont
+            for i in 1:n_beams
+                hi, wi, twi, tfi = current_vars[i]
+                A_new  = A_I_asymm(hi, wi, wi, twi, tfi, tfi)
+                Ix_new = Ix_I_asymm(hi, wi, wi, twi, tfi, tfi)
+                L_beam = beam_elements[i].length
+                lim_240 = L_beam / 240.0
+                δ_sw_new   = 5 * steel_ksi.ρ * A_new * L_beam^4 /
+                             (384 * steel_ksi.E * max(Ix_new, 1e-12))
+                # Linearized projection of staged deflection at the new section
+                δ_dead_new = δ_dead_bare[i] * bare_Ix_used[i] / max(Ix_new, 1e-12)
+                δ_live_new = δ_sdl_live[i]  * comp_Ix_used[i] / max(Ix_new, 1e-12) /
+                             max(composite_ratio_vec[i], 1.0)
+                δ_total_new = δ_dead_new + δ_sw_new + δ_live_new
+                if δ_total_new > lim_240 * 1.02
+                    defl_ok = false
+                    break
+                end
+            end
+        end
+
+        if cur_obj < best_obj && defl_ok
             best_obj  = cur_obj
             best_vars = deepcopy(current_vars)
         end
 
-        if demand_iter > 1 && rel_change < demand_tol
+        if demand_iter > 1 && rel_change < demand_tol && defl_ok
             println("  demand loop converged after $demand_iter iterations.")
             break
         end

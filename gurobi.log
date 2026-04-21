@@ -1,0 +1,13 @@
+
+Gurobi 12.0.1 (mac64[x86], gurobi_cl) logging started Thu Apr 16 13:14:21 2026
+
+Set parameter Username
+Set parameter LicenseID to value 2658832
+Set parameter LogFile to value "gurobi.log"
+
+--------------------------------------------
+Warning: your license will expire in 13 days
+--------------------------------------------
+
+Using license file /Users/tashahirt/gurobi.lic
+Academic license - for non-commercial use only - expires 2026-04-29

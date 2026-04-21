@@ -1,0 +1,9 @@
+variant=shap_decision_only
+rows_total=11160
+rows_explained=250
+features_onehot=9
+dropped_columns=row,col,category,layout,name
+model=RandomForestRegressor
+train_r2=0.108449
+train_mae=33.428042
+note=SHAP computed with TreeExplainer

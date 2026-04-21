@@ -1,29 +1,43 @@
 """
     get_deflection_constraint(beam_params, beam_length, params; beam_element, element_loads)
 
-Creates a constraint function for checking beam deflection against serviceability limits.
+Single serviceability inequality constraint for the beam NLP.
 
-When `params.composite_action` is true **and** staged load data is available in
-`params.load_df`, the constraint enforces both:
-- **L/360** for live-load–only deflection (on composite section)
-- **L/240** for total deflection (dead on bare steel + SDL/LL on composite)
+# Composite branch (`params.composite_action == true`)
 
-Load fractions are precomputed from `params.load_df` so the returned closure
-is differentiable (the stiffness ratio `Ix_comp/Ix_bare` depends on the design
-variables and is recomputed each call).
+Applies the **total unfactored service load** (slab DL + SDL + LL + beam
+self-weight) to the **transformed composite section** and checks
 
-When composite action is disabled, the single limit `params.serviceability_lim`
-is used as before.
+    δ_composite = δ_bare · (I_bare / I_composite)  ≤  L / `serviceability_lim`
 
-# Arguments
-- `beam_params::FrameOptParams`: Parameters for frame optimization
-- `beam_length::Real`: Length of the beam
-- `params::SlabSizingParams`: Parameters for slab sizing including serviceability limits
-- `beam_element`: The beam element (needed for composite spacing derivation)
-- `element_loads`: Loads on this beam element (needed for tributary area calculation)
+where
+
+- `δ_bare` is the FE deflection of the bare steel beam under the total
+  unfactored load (the FE adds self-weight via `dead_load = steel.ρ`), and
+- `I_composite` is the effective transformed-section moment of inertia per
+  AISC 360 §I3.1a (`get_I_composite_effective`), with concrete transformed
+  by the modular ratio `n = E_s / E_c` and the effective width bounded by
+  the `L/8` per-side cap.
+
+This is a deliberate single-limit preliminary-sizing formulation: no
+staged (L/360-live + L/240-total) split, no construction-stage bookkeeping,
+no deflection-reduction factor. The rationale and citations are documented
+in the accompanying paper (see `size_beams.jl::optimal_beamsizer`).
+
+# Bare-steel branch (`params.composite_action == false`)
+
+Bare-steel Ix with analytical self-weight contribution, divided by
+`params.deflection_reduction_factor` (typically 1.0 for pure bare-steel
+design; kept for Nov 2024 compatibility where a composite-stiffness
+multiplier was used instead of a transformed section):
+
+    (δ_bare + δ_SW) / DRF  ≤  L / `serviceability_lim`
 
 # Returns
-- Function `vars -> Vector{Float64}` of constraint residuals (each ≤ 0 when feasible).
+
+Closure `vars -> Vector{Float64}` of length 1 with a single residual
+`δ - δ_max` (feasible when `≤ 0`). Differentiable in `vars` — the
+composite `Ix` is recomputed each call.
 """
 function get_deflection_constraint(beam_params::FrameOptParams, beam_length::Real, params::SlabSizingParams;
                                    beam_element::Union{Element,Nothing}=nothing,
@@ -34,111 +48,73 @@ function get_deflection_constraint(beam_params::FrameOptParams, beam_length::Rea
     composite_ctx = nothing
     if use_composite
         loadid_index = _build_loadid_index(params)
-        L_beam = beam_element.length
-        load_positions = Float64[]
+        load_positions   = Float64[]
         load_trib_widths = Float64[]
         for ld in element_loads
             if hasproperty(ld, :loadID)
                 row = get(loadid_index, getproperty(ld, :loadID), nothing)
                 if !isnothing(row)
-                    push!(load_positions, ld.position)
+                    push!(load_positions,   ld.position)
                     push!(load_trib_widths, params.load_df[row, :trib_width])
                 end
             end
         end
         beam_idx = findfirst(el -> el === beam_element, params.model.elements[:beam])
         is_perim = !isnothing(beam_idx) && beam_idx in params.i_perimeter
-        t_slab = params.slab_depth_in
-        E_s = steel_ksi.E
-        E_c = params.E_c
-        composite_ctx = (L_beam=L_beam, positions=load_positions,
-                         widths=load_trib_widths, t_slab=t_slab, E_s=E_s, E_c=E_c,
-                         is_perimeter=is_perim)
-    end
-
-    # Precompute load fractions for staged deflection.
-    # f_dead: fraction of total unfactored load that is slab DL (+ beam SW, which
-    #         is handled inside the FE solver via dead_load=ρ and proportionally
-    #         scales with the total).
-    # f_live: fraction that is live load alone (governs L/360).
-    has_staged = use_composite &&
-                 :unfactored_w_live in propertynames(params.load_df)
-
-    f_dead = 1.0
-    f_sdl  = 0.0
-    f_live = 0.0
-    if has_staged
-        loadid_index_staged = _build_loadid_index(params)
-        w_slab = 0.0; w_sdl = 0.0; w_live = 0.0
-        for ld in element_loads
-            if hasproperty(ld, :loadID)
-                row = get(loadid_index_staged, getproperty(ld, :loadID), nothing)
-                if !isnothing(row)
-                    w_slab += params.load_df[row, :unfactored_w_slab]
-                    w_sdl  += params.load_df[row, :unfactored_w_sdl]
-                    w_live += params.load_df[row, :unfactored_w_live]
-                end
-            end
-        end
-        w_total = w_slab + w_sdl + w_live
-        if w_total > 0
-            f_dead = w_slab / w_total
-            f_sdl  = w_sdl  / w_total
-            f_live = w_live / w_total
-        end
+        composite_ctx = (L_beam       = beam_element.length,
+                         positions    = load_positions,
+                         widths       = load_trib_widths,
+                         t_slab       = params.slab_depth_in,
+                         E_s          = steel_ksi.E,
+                         E_c          = params.E_c,
+                         is_perimeter = is_perim)
     end
 
     ρ_steel_kip = steel_ksi.ρ
 
-    function staged_deflection_constraint(vars::Vector)
+    # Effective deflection limit after applying the reconciliation-loop
+    # tightening factor. `serviceability_tighten ≥ 1` shrinks the allowable
+    # δ so the sizer targets e.g. L/(360·1.15) internally while the paper
+    # still reports L/360; set to 1.0 for a plain single-limit regime.
+    δ_max = beam_length / (params.serviceability_lim * params.serviceability_tighten)
 
+    # Composite stiffness knockdown (AISC partial shear connection / slip /
+    # creep). Applied to `Ix_comp` in the sizer; `postprocess_slab` applies
+    # the same factor so the two paths stay consistent.
+    pcf = params.partial_composite_factor
+
+    function single_section_deflection(vars::Vector)
+        # FE deflection under total unfactored point loads + beam self-weight
+        # (dead_load defaults to steel density when material is passed).
         δ_local = Zygote.ignore() do
             get_element_deflection(beam_params, vars, material=steel_ksi)
         end
+        δ_bare = maximum(abs.(δ_local))
 
-        δ_abs = maximum(abs.(δ_local))
+        h, w, tw, tf = vars[1], vars[2], vars[3], vars[4]
+        Ix_bare = Ix_I_symm(h, w, tw, tf)
 
         if use_composite
-            h, w, tw, tf = vars[1], vars[2], vars[3], vars[4]
-            Ix_bare = Ix_I_symm(h, w, tw, tf)
-            Ix_comp = get_I_composite_effective(h, w, tw, tf, composite_ctx.t_slab,
-                          composite_ctx.E_s, composite_ctx.E_c, composite_ctx.L_beam,
-                          composite_ctx.positions, composite_ctx.widths;
-                          is_perimeter=composite_ctx.is_perimeter)
-            stiffness_ratio = Ix_comp / Ix_bare
-
-            # Analytical beam self-weight deflection on bare steel:
-            # δ_beam_sw = 5·w·L⁴ / (384·E·Ix_bare)
-            A_section = A_I_symm(h, w, tw, tf)
-            w_sw = A_section * ρ_steel_kip
-            δ_beam_sw = 5 * w_sw * beam_length^4 / (384 * steel_ksi.E * Ix_bare)
-
-            if has_staged
-                # Dead loads stay on bare steel; SDL+LL scale by composite ratio
-                δ_dead_bare  = δ_abs * f_dead + δ_beam_sw
-                δ_sdl_comp   = δ_abs * f_sdl  / stiffness_ratio
-                δ_live_comp  = δ_abs * f_live / stiffness_ratio
-                δ_total      = δ_dead_bare + δ_sdl_comp + δ_live_comp
-
-                live_limit  = beam_length / 360.0
-                total_limit = beam_length / 240.0
-
-                return [δ_live_comp - live_limit,
-                        δ_total - total_limit]
-            else
-                δ_local_scaled = δ_abs / stiffness_ratio
-                δ_local_scaled /= params.deflection_reduction_factor
-                δ_max = beam_length / params.serviceability_lim
-                return [δ_local_scaled - δ_max]
-            end
+            Ix_comp_full = get_I_composite_effective(h, w, tw, tf,
+                         composite_ctx.t_slab, composite_ctx.E_s, composite_ctx.E_c,
+                         composite_ctx.L_beam,
+                         composite_ctx.positions, composite_ctx.widths;
+                         is_perimeter=composite_ctx.is_perimeter)
+            # Partial-composite knockdown: Ix_eff = Ix_bare + pcf · (Ix_comp − Ix_bare).
+            # At pcf = 1 this is the full transformed Ix; at pcf = 0 it collapses
+            # to bare steel. Preserves Ix_eff ≥ Ix_bare under any knockdown,
+            # which the naive `pcf · Ix_comp` form does not.
+            Ix_eff      = Ix_bare + pcf * (Ix_comp_full - Ix_bare)
+            δ_composite = δ_bare * Ix_bare / Ix_eff
+            return [δ_composite - δ_max]
         end
 
-        δ_abs /= params.deflection_reduction_factor
-        δ_max = beam_length / params.serviceability_lim
-        return [δ_abs - δ_max]
+        # Bare-steel fallback: divide by DRF (kept for Nov 2024-style designs
+        # that use a stiffness multiplier instead of a transformed section).
+        return [δ_bare / params.deflection_reduction_factor - δ_max]
     end
 
-    return staged_deflection_constraint
+    return single_section_deflection
 end
 
 """

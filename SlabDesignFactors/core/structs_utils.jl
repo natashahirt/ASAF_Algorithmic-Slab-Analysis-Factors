@@ -31,6 +31,7 @@ function reset_SlabAnalysisParams(self::SlabAnalysisParams, model::Asap.Model; p
         load_widths=self.load_widths,
         max_spans=self.max_spans,
         slab_depths=self.slab_depths,
+        storey_height_m=self.storey_height_m,
         plot_analysis=self.plot_context.plot,
         load_dictionary=self.load_dictionary,
         trib_dictionary=self.trib_dictionary,
@@ -85,12 +86,17 @@ function reset_SlabSizingParams(self::SlabSizingParams)
         E_c=self.E_c,
         slab_depth_in=self.slab_depth_in,
         i_perimeter=self.i_perimeter,
+        partial_composite_factor=self.partial_composite_factor,
+        serviceability_tighten=self.serviceability_tighten,
+        reconcile_max_iter=self.reconcile_max_iter,
+        reconcile_tol=self.reconcile_tol,
         min_Ix_comp=self.min_Ix_comp,
         min_Ix_bare=self.min_Ix_bare,
         max_bay_span=self.max_bay_span,
         mip_result=self.mip_result,
         staged_converged=self.staged_converged,
         staged_n_violations=self.staged_n_violations,
-        verbose=self.verbose
+        verbose=self.verbose,
+        concrete_material=self.concrete_material,
     )
 end

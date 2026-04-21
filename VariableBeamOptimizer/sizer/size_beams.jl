@@ -9,379 +9,205 @@ function optimal_beamsizer!(self::SlabAnalysisParams, params::SlabSizingParams; 
 end
 
 """
-    optimal_beamsizer(self, params; initial_vars, max_staged_iters)
+    optimal_beamsizer(self, params; initial_vars)
 
-Takes metric forces to size imperial beams and returns imperial beams.
+Size beams under a single-pass, single-limit regime.
 
-When composite action is enabled and staged load columns exist in `load_df`,
-an outer convergence loop verifies the sized sections against exact staged
-deflection limits (L/360 live, L/240 total) using global FE solves.  Beams
-that violate a limit have their minimum Ix floors tightened, and the sizer
-re-runs until all beams comply or `max_staged_iters` is reached.
+# Regime
+
+Both composite (`params.composite_action = true`) and bare-steel
+(`false`) modes use a **single deflection constraint** on the total
+unfactored service load (see `get_deflection_constraint`). Composite
+mode evaluates that constraint against the AISC I3.1a transformed-section
+`I_x` (no construction-stage bookkeeping, no separate L/360-live and
+L/240-total checks). Bare-steel mode uses bare `I_x` with
+`params.deflection_reduction_factor` for back-compatibility with
+Nov 2024-style designs that approximated composite action via a
+stiffness multiplier rather than a transformed section.
+
+No outer convergence loop, no Gurobi MIP warm start, no staged demand
+iteration. If you want to warm-start the continuous NLP from a discrete
+catalogue pass, run this function once with `beam_sizer = :discrete`
+and feed its minimizers back as `initial_vars` to a second call with
+`beam_sizer = :continuous` (see the `iterate_discrete_continuous`
+pattern below).
+
+# Arguments
+
+- `self`   : `SlabAnalysisParams` with loads, geometry, model already
+            populated by `analyze_slab`.
+- `params` : `SlabSizingParams` controlling the sizing regime.
+- `initial_vars`: warm-start sections for the continuous NLP (empty
+            vector, `Vector{String}` of W-imperial names, a
+            `Vector{Vector{Float64}}` of `[h, w, tw, tf]` per beam, or a
+            `Vector{Section}`).
+
+# Returns
+
+`(self, params)` with `params.minimizers`, `params.minimums`,
+`params.ids`, `params.M_maxs`, `params.V_maxs`, `params.x_maxs`
+populated.
 """
 function optimal_beamsizer(self::SlabAnalysisParams, params::SlabSizingParams;
-                           initial_vars::Vector=[], max_staged_iters::Int=15)
+                           initial_vars::Vector=[])
 
     params.model = self.model
 
     if !isempty(params.M_maxs)
-        self = reset_SlabAnalysisParams(self, self.model)
+        self   = reset_SlabAnalysisParams(self, self.model)
         params = reset_SlabSizingParams(params)
     end
 
-    # convert model lengths to inches
-    conversion_factor = convert_to_m[self.slab_units] * 1/convert_to_m[params.beam_units]
-    params.area = self.area * conversion_factor^2
+    conversion_factor = convert_to_m[self.slab_units] * 1 / convert_to_m[params.beam_units]
+    params.area       = self.area * conversion_factor^2
 
-    # Adjust max depth based on slab depth
     if params.max_assembly_depth
-        slab_depth = maximum(self.slab_depths) * conversion_factor
+        slab_depth            = maximum(self.slab_depths) * conversion_factor
         params.max_beam_depth = params.max_depth - slab_depth
     end
 
-    # Store slab depth, perimeter set, and max bay span in beam units for composite action
+    # Composite-specific context: slab depth and perimeter set drive the
+    # transformed-Ix calculation in `get_deflection_constraint`.
     if params.composite_action
         params.slab_depth_in = maximum(self.slab_depths) * conversion_factor
-        params.i_perimeter = Set(self.i_perimeter)
+        params.i_perimeter   = Set(self.i_perimeter)
     end
     params.max_bay_span = maximum(self.max_spans) * conversion_factor
 
-    params.model = get_scaled_model(self, params, conversion_factor)
+    params.model           = get_scaled_model(self, params, conversion_factor)
     params.load_dictionary = get_load_dictionary_by_id(params.model)
 
-    # Compute collinear groups (used by MIP to enforce same-section constraint)
     if params.collinear == true
         params.collinear_groups = get_collinear_groups(params.model.elements[:beam])
     end
 
-    has_staged = params.composite_action &&
-                 params.deflection_limit &&
-                 :unfactored_w_live in propertynames(params.load_df)
-
-    # ── MIP warm-start for NLP: run discrete sizing first to seed NLP ──
-    if params.beam_sizer == :continuous && isempty(initial_vars)
-        try
-            println("Running MIP warm-start for NLP...")
-            mip_params = deepcopy(params)
-            mip_params.beam_sizer = :discrete
-            mip_params = process_discrete_beams_integer(mip_params)
-            if !isempty(mip_params.ids)
-                initial_vars = mip_params.ids
-                params.mip_result = mip_params
-                println("  MIP warm-start: $(length(initial_vars)) sections seeded.")
-            end
-        catch e
-            @warn "MIP warm-start failed; NLP will use default init" exception=e
+    # Serial sizers are routed through `get_deflection_constraint` directly
+    # — the parallel/MIP paths in `size_fast.jl` reimplement staged deflection
+    # logic internally and are incompatible with the single-limit regime.
+    try
+        if params.beam_sizer == :continuous
+            params = process_continuous_beams(params, initial_vars)
+        elseif params.beam_sizer == :discrete
+            params = process_discrete_beams(params)
         end
-    end
-
-    # Preserve the best valid sizing result across outer-loop iterations
-    best_minimizers = Vector{Float64}[]
-    best_minimums   = Float64[]
-    best_ids        = String[]
-    best_M_maxs     = Float64[]
-    best_V_maxs     = Float64[]
-    best_x_maxs     = Float64[]
-
-    # Cycle detection state
-    viol_history = Int[]
-    cycling      = false
-    final_n_viol = 0
-
-    for staged_iter in 1:max_staged_iters
-
-        # ── size beams ────────────────────────────────────────────────────
-        if staged_iter > 1
+    catch e
+        if e isa NoValidSectionsError
+            @warn "Deflection-feasible design infeasible: $(e.msg)"
             params.minimizers = Vector{Float64}[]
-            params.minimums   = Float64[]
-            params.ids        = String[]
-            params.M_maxs     = Float64[]
-            params.V_maxs     = Float64[]
-            params.x_maxs     = Float64[]
-        end
-
-        try
-            if params.beam_sizer == :continuous
-                params = process_continuous_beams_parallel(params, initial_vars=initial_vars)
-            elseif params.beam_sizer == :discrete
-                params = process_discrete_beams_integer(params)
-            end
-        catch e
-            if e isa NoValidSectionsError
-                @warn "Deflection-feasible design infeasible: $(e.msg)"
-                params.minimizers = Vector{Float64}[]
-            else
-                rethrow(e)
-            end
-        end
-
-        if params.verbose
-            println("Minimums: $(params.minimums)")
-        end
-
-        # Skip staged verification when not applicable
-        if !has_staged
-            break
-        end
-
-        # If sizing failed (e.g. infeasible MIP), restore best prior result
-        if isempty(params.minimizers)
-            @warn "Sizing produced no results on iteration $staged_iter; restoring best prior result."
-            params.minimizers = best_minimizers
-            params.minimums   = best_minimums
-            params.ids        = best_ids
-            params.M_maxs     = best_M_maxs
-            params.V_maxs     = best_V_maxs
-            params.x_maxs     = best_x_maxs
-            break
-        end
-
-        # Snapshot current result as the best so far
-        best_minimizers = copy(params.minimizers)
-        best_minimums   = copy(params.minimums)
-        best_ids        = copy(params.ids)
-        best_M_maxs     = copy(params.M_maxs)
-        best_V_maxs     = copy(params.V_maxs)
-        best_x_maxs     = copy(params.x_maxs)
-
-        # ── staged deflection verification (exact global FE) ──────────────
-        n_viol, new_Ix_comp, new_Ix_bare = _verify_staged_deflection(params)
-        final_n_viol = n_viol
-
-        if n_viol == 0
-            println("Staged deflection feasible after $staged_iter sizing iteration(s).")
-            break
-        end
-
-        # ── cycle detection ───────────────────────────────────────────────
-        push!(viol_history, n_viol)
-        if !cycling && length(viol_history) >= 4
-            recent = viol_history[end-2:end]
-            if minimum(recent) >= viol_history[end-3]
-                cycling = true
-                println("Staged deflection cycle detected at iter $staged_iter — switching to ratchet mode.")
-            end
-        end
-
-        println("Staged deflection: $n_viol beam(s) violate limits — updating Ix floors (iter $staged_iter)$(cycling ? " [ratchet]" : "")...")
-
-        α = 0.7
-        overshoot = cycling ? 1.1 : 1.0
-
-        for (i, val) in new_Ix_comp
-            target = val * overshoot
-            old = get(params.min_Ix_comp, i, 0.0)
-            blended = old + α * (target - old)
-            params.min_Ix_comp[i] = cycling ? max(old, blended) : blended
-        end
-        for (i, val) in new_Ix_bare
-            target = val * overshoot
-            old = get(params.min_Ix_bare, i, 0.0)
-            blended = old + α * (target - old)
-            params.min_Ix_bare[i] = cycling ? max(old, blended) : blended
-        end
-
-        if !cycling
-            # Decay floors for beams no longer in violation (disabled when cycling)
-            for i in collect(keys(params.min_Ix_comp))
-                if !haskey(new_Ix_comp, i)
-                    params.min_Ix_comp[i] *= (1 - α)
-                end
-            end
-            for i in collect(keys(params.min_Ix_bare))
-                if !haskey(new_Ix_bare, i)
-                    params.min_Ix_bare[i] *= (1 - α)
-                end
-            end
-        end
-
-        if staged_iter == max_staged_iters
-            @warn "Staged deflection did not fully converge after $max_staged_iters iterations; $n_viol violation(s) remain."
+        else
+            rethrow(e)
         end
     end
 
-    # Record convergence outcome on sizing params for downstream filtering
-    params.staged_converged    = !has_staged || final_n_viol == 0
-    params.staged_n_violations = final_n_viol
+    if params.verbose
+        println("Minimums: $(params.minimums)")
+    end
+
+    # Legacy staged-bookkeeping fields — always "converged" under the
+    # single-pass regime. Kept on `SlabSizingParams` for downstream API
+    # compatibility.
+    params.staged_converged    = true
+    params.staged_n_violations = 0
 
     return self, params
 end
 
 """
-    _verify_staged_deflection(params) -> (n_violations, Ix_comp_needed, Ix_bare_needed)
+    optimal_beamsizer_reconcile(self, params; initial_vars=[], verbose=false)
 
-Run exact staged FE solves with the current minimizers and check L/360 / L/240.
-Returns the number of violating beams and Dicts of tightened Ix requirements
-for any beam that fails (keyed by beam index).
+Size beams with a lightweight outer reconciliation loop that aligns the
+sizer's per-beam deflection constraint with the global-FE deflection
+measured by `postprocess_slab`.
+
+The two deflection models differ by construction:
+
+- **Sizer constraint** (`get_deflection_constraint`, per-beam FE on a
+  pin-roller span with composite `I_x` scaling) is fast and Zygote-
+  differentiable.
+- **Postprocess check** (`postprocess_slab`, global FE with composite
+  `I_x` substituted into each beam's `Section`) captures frame coupling,
+  support interaction, and load application semantics that the per-beam
+  model cannot.
+
+Empirically these diverge by a roughly constant factor across a slab
+(frame-coupling tends to scale deflection uniformly). Instead of running
+a global FE inside every NLP iteration, this loop:
+
+ 1. Sizes once with the current `serviceability_tighten`.
+ 2. Calls `postprocess_slab` and computes `max(δ / Δ_lim)`.
+ 3. If `max_ratio > 1 + reconcile_tol`, multiplies
+    `serviceability_tighten *= max_ratio` (so the sizer effectively
+    targets `L / (serviceability_lim · tighten)`), warm-starts from the
+    last minimizers, and re-sizes.
+ 4. Stops when the ratio converges, the minimizer is empty, or after
+    `params.reconcile_max_iter` iterations.
+
+When `params.reconcile_max_iter == 0` this reduces to a single call to
+`optimal_beamsizer` followed by one `postprocess_slab`, i.e. the default
+single-pass regime.
+
+# Returns
+
+`(self, params, result, max_ratio, n_iters)` where
+- `result` is the `SlabOptimResults` from the final `postprocess_slab`
+  (populated for the serviceable design).
+- `max_ratio` is the postprocess `δ / Δ_lim` attained at exit (≤1 means
+  the sizer-postprocess gap is closed).
+- `n_iters` is the number of sizer calls used (always ≥ 1).
 """
-function _verify_staged_deflection(params::SlabSizingParams)
-    beam_elements = params.model.elements[:beam]
-    n_beams = length(beam_elements)
-    minimizers = params.minimizers
+function optimal_beamsizer_reconcile(self::SlabAnalysisParams, params::SlabSizingParams;
+                                     initial_vars::Vector=[], verbose::Bool=false)
 
-    E_steel = steel_ksi.E
-    ρ_steel_kip = steel_ksi.ρ
+    max_iter = params.reconcile_max_iter
+    tol      = params.reconcile_tol
+    warm     = initial_vars
 
-    beam_ids = [get_element_id(be) for be in beam_elements]
+    result      = nothing
+    max_ratio   = 0.0
+    n_iters     = 0
 
-    # Compute fresh section properties from minimizers
-    sec_A   = [A_I_symm(minimizers[i]...)  for i in 1:n_beams]
-    bare_Ix = [Ix_I_symm(minimizers[i]...) for i in 1:n_beams]
-    sec_Iy  = [Iy_I_symm(minimizers[i]...) for i in 1:n_beams]
-    sec_J   = [J_I_symm(minimizers[i]...)  for i in 1:n_beams]
+    for iter in 0:max_iter
+        n_iters += 1
+        self, params = optimal_beamsizer(self, params; initial_vars=warm)
 
-    comp_Ix  = copy(bare_Ix)
-    if params.composite_action && params.slab_depth_in > 0
-        for i in 1:n_beams
-            L_beam = beam_elements[i].length
-            element_loads_i = params.load_dictionary[beam_ids[i]]
-            positions_i = Float64[]
-            widths_i = Float64[]
-            for ld in element_loads_i
-                if hasproperty(ld, :loadID)
-                    row = findfirst(==(getproperty(ld, :loadID)), params.load_df.loadID)
-                    if !isnothing(row)
-                        push!(positions_i, ld.position)
-                        push!(widths_i, params.load_df[row, :trib_width])
-                    end
-                end
-            end
-            if !isempty(widths_i)
-                is_perim = i in params.i_perimeter
-                comp_Ix[i] = get_I_composite_effective(
-                    minimizers[i][1], minimizers[i][2], minimizers[i][3], minimizers[i][4],
-                    params.slab_depth_in, E_steel, params.E_c,
-                    L_beam, positions_i, widths_i; is_perimeter=is_perim)
-            end
-        end
-    end
-
-    # Set bare-steel sections for Solve A (fresh A, Iy, J from minimizers)
-    for i in 1:n_beams
-        beam_elements[i].section = Section(sec_A[i], E_steel, steel_ksi.G,
-            bare_Ix[i], sec_Iy[i], sec_J[i])
-    end
-    update_load_values_staged!(params.model, params, load_case=:slab_dead)
-    params.load_dictionary = get_load_dictionary_by_id(params.model)
-    Asap.solve!(params.model, reprocess=true)
-
-    δ_slab_dead = zeros(n_beams)
-    for i in 1:n_beams
-        disp = ElementDisplacements(beam_elements[i],
-            params.load_dictionary[beam_ids[i]], resolution=200)
-        δ_slab_dead[i] = maximum(abs.(disp.ulocal[2, :]))
-    end
-
-    # Analytical beam self-weight on bare steel
-    δ_beam_dead = zeros(n_beams)
-    for i in 1:n_beams
-        w_sw = sec_A[i] * ρ_steel_kip
-        L_in = beam_elements[i].length
-        δ_beam_dead[i] = 5 * w_sw * L_in^4 / (384 * E_steel * bare_Ix[i])
-    end
-
-    # Set composite sections for Solve B (fresh A, Iy, J from minimizers)
-    for i in 1:n_beams
-        beam_elements[i].section = Section(sec_A[i], E_steel, steel_ksi.G,
-            comp_Ix[i], sec_Iy[i], sec_J[i])
-    end
-    update_load_values_staged!(params.model, params, load_case=:sdl_live)
-    params.load_dictionary = get_load_dictionary_by_id(params.model)
-    Asap.solve!(params.model, reprocess=true)
-
-    δ_sdl_live = zeros(n_beams)
-    for i in 1:n_beams
-        disp = ElementDisplacements(beam_elements[i],
-            params.load_dictionary[beam_ids[i]], resolution=200)
-        δ_sdl_live[i] = maximum(abs.(disp.ulocal[2, :]))
-    end
-
-    # Split SDL+LL by load ratio
-    loadid_index = _build_loadid_index(params)
-    δ_live = zeros(n_beams)
-    δ_total = zeros(n_beams)
-    for i in 1:n_beams
-        w_sdl_sum = 0.0; w_live_sum = 0.0
-        for ld in params.load_dictionary[beam_ids[i]]
-            if hasproperty(ld, :loadID)
-                row = get(loadid_index, ld.loadID, nothing)
-                if !isnothing(row)
-                    w_sdl_sum  += params.load_df[row, :unfactored_w_sdl]
-                    w_live_sum += params.load_df[row, :unfactored_w_live]
-                end
-            end
-        end
-        w_tot = w_sdl_sum + w_live_sum
-        f_live = w_tot > 0 ? w_live_sum / w_tot : 0.5
-        δ_live[i] = δ_sdl_live[i] * f_live
-        δ_total[i] = δ_slab_dead[i] + δ_beam_dead[i] + δ_sdl_live[i]
-    end
-
-    # ── Global deflection sanity check ────────────────────────────────
-    if params.max_bay_span > 0
-        max_total_δ = maximum(δ_total)
-        global_lim = params.max_bay_span / 180.0
-        if max_total_δ > global_lim
-            @warn "Global deflection sanity: max δ_total exceeds max-bay-span/180" max_total_δ global_lim params.max_bay_span
-        end
-    end
-
-    # Restore factored loads for subsequent sizing
-    update_load_values!(params.model, params, factored=true)
-    params.load_dictionary = get_load_dictionary_by_id(params.model)
-    Asap.solve!(params.model, reprocess=true)
-
-    # Check L/360 (live) and L/240 (total) limits.
-    # For violating beams, compute the composite Ix that would satisfy each
-    # limit and the bare-steel Ix needed to keep dead-load deflection in check.
-    # No preemptive tightening or budget splitting — the outer loop converges
-    # naturally by re-solving with updated Ix floors.
-    Ix_comp_needed = Dict{Int, Float64}()
-    Ix_bare_needed = Dict{Int, Float64}()
-    n_viol = 0
-
-    for i in 1:n_beams
-        L = beam_elements[i].length
-        lim_live  = L / 360.0
-        lim_total = L / 240.0
-        violated = false
-
-        # ── L/360 live ────────────────────────────────────────────────
-        if lim_live > 0 && δ_live[i] > lim_live
-            Ix_comp_needed[i] = comp_Ix[i] * δ_live[i] / lim_live
-            violated = true
+        if isempty(params.minimizers)
+            verbose && @warn "Reconciliation exited at iter $iter: no feasible sections"
+            break
         end
 
-        # ── L/240 total (coupled) ────────────────────────────────────
-        if lim_total > 0 && δ_total[i] > lim_total
-            δ_dead_portion = δ_slab_dead[i] + δ_beam_dead[i]
-            residual_240 = max(lim_total - δ_dead_portion, lim_total * 0.1)
+        # Full postprocess — we need the per-beam deflections anyway to
+        # decide whether to tighten. The loop exits as soon as the check
+        # is satisfied.
+        result = postprocess_slab(self, params)
 
-            if δ_sdl_live[i] > residual_240
-                new_comp = comp_Ix[i] * δ_sdl_live[i] / residual_240
-                Ix_comp_needed[i] = max(get(Ix_comp_needed, i, 0.0), new_comp)
-            end
+        lim_vec = result.Δ_limit_total
+        δ_vec   = result.δ_total
+        ratios  = [lim_vec[i] > 0 ? δ_vec[i] / lim_vec[i] : 0.0 for i in eachindex(δ_vec)]
+        max_ratio = isempty(ratios) ? 0.0 : maximum(ratios)
 
-            if δ_dead_portion > lim_total
-                Ix_bare_needed[i] = bare_Ix[i] * δ_dead_portion / lim_total
-            end
+        verbose && println("  reconcile iter=$iter  tighten=$(round(params.serviceability_tighten, digits=3))  " *
+                           "max δ/Δ=$(round(max_ratio, digits=3))  n_fail=$(count(ratios .> 1.0 + tol))")
 
-            violated = true
+        # Converged or disabled
+        if max_ratio <= 1.0 + tol || max_iter == 0
+            break
         end
 
-        if violated
-            n_viol += 1
-        end
+        # Tighten and warm-start the next iteration from the current
+        # minimizers (cheap — NLP only needs a few iterations per beam).
+        params.serviceability_tighten *= max_ratio
+        warm = params.minimizers
     end
 
-    return n_viol, Ix_comp_needed, Ix_bare_needed
+    return self, params, result, max_ratio, n_iters
 end
 
-
 """
-    process_discrete_beams!(beam_elements, slab_model, minimizers, minimums, ids, params::SlabSizingParams)
+    process_discrete_beams(params::SlabSizingParams) -> SlabSizingParams
 
-Processes discrete beam sizing.
+Size each beam sequentially against the catalogue in `params.catalog_discrete`
+using `sequential_search_sections`, with the single-limit deflection
+constraint provided by `get_deflection_constraint`.
 """
 function process_discrete_beams(params::SlabSizingParams)
     
@@ -534,17 +360,24 @@ function process_continuous_beams(params::SlabSizingParams, initial_vars::Vector
             ftol_rel=1e-2,
         )
 
+        # `typeof(initial_vars) == Vector{Vector}` is Julia-type-invariant
+        # (it's false for `Vector{Vector{Float64}}`), so we match the element
+        # type instead to properly flow `Vector{Vector{Float64}}` warm starts.
         if isempty(initial_vars)
             init_vars = broadcast_in(get_geometry_vars(W_imperial("W6X8.5")))
-        elseif typeof(initial_vars) == Vector{String}
+        elseif eltype(initial_vars) <: AbstractString
             init_vars = broadcast_in(get_geometry_vars(W_imperial(initial_vars[i])))
-        elseif typeof(initial_vars) == Vector{Vector}
+        elseif eltype(initial_vars) <: AbstractVector
             init_vars = broadcast_in(initial_vars[i])
-        elseif typeof(initial_vars) == Vector{Section}
+        elseif eltype(initial_vars) <: Asap.AbstractSection
             init_vars = broadcast_in(get_geometry_vars(initial_vars[i]))
+        else
+            init_vars = broadcast_in(get_geometry_vars(W_imperial("W6X8.5")))
         end
 
-        result = optimize(optimization_model, alg, init_vars, options = options)
+        # Qualify to `Nonconvex.optimize` — several loaded packages (Optim,
+        # NLopt, NonconvexCore/MMA/NLopt/Ipopt/Juniper) export `optimize`.
+        result = Nonconvex.optimize(optimization_model, alg, init_vars, options=options)
 
         println("")
         push!(params.minimizers, result.minimizer)

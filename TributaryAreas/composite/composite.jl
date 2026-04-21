@@ -5,8 +5,28 @@ All units are inches and ksi (consistent with VariableBeamOptimizer conventions)
 Implements AISC I3.1a effective width and elastic transformed-section moment of inertia
 for full-composite solid slab on steel I-beam.
 
-Self-contained: inlines the Ix calculation so this file has no external dependencies.
+Self-contained: inlines the Ix calculation so this file has no external
+dependencies. If Zygote is loaded in the including scope (the normal case
+when running from `_scripts.jl`), `get_I_composite_effective` hides its
+non-differentiable geometry preprocessing from AD; otherwise the helper
+below becomes a no-op and the function still runs normally.
 """
+
+"""
+    _ad_ignore(f)
+
+Run `f()` with Zygote AD hidden if Zygote is available in the including
+module, otherwise just call `f()`. Keeps `composite.jl` usable both from
+the full optimization stack (where Zygote is required) and from
+standalone diagnostics like `test_composite_effective.jl`.
+"""
+@inline function _ad_ignore(f)
+    if @isdefined(Zygote)
+        return Zygote.ignore(f)
+    else
+        return f()
+    end
+end
 
 """
     _Ix_I_symm(h, w, tw, tf)
@@ -41,17 +61,24 @@ Effective concrete flange width per AISC 360, Section I3.1a.
 Works directly from tributary polygon geometry — no "beam spacing" needed.
 
 **Interior beams** (slab on both sides): `trib_width_total` is the sum of
-the one-sided tributary widths from the two adjacent cycles. Each side
-contributes at most `L/8`, so `b_eff = min(L/4, trib_width_total)`.
+the per-side tributary widths from the two adjacent cycles, *each already
+capped at `L/8`* by the caller (see `get_I_composite_effective`). The
+total is therefore bounded by `L/4`, matching AISC I3.1a(a).
 
 **Perimeter beams** (slab on one side only): only one cycle contributes
 tributary width. The slab-side half-width is capped at `L/8`, and there
 is no slab on the free edge, so `b_eff = min(L/8, trib_width_total)`.
 
+Applying the per-side L/8 cap *before* summing matters for irregular
+geometries where one side's trib is much wider than the other: summing
+raw widths and capping the sum at L/4 lets a wide side compensate for a
+narrow side, overestimating the effective flange. See the comments in
+`get_I_composite_effective` for the pre-aggregation handling.
+
 # Arguments
 - `L_beam`: beam span (in)
 - `trib_width_total`: total perpendicular tributary width at this station (in),
-  already aggregated across both sides for interior beams
+  already per-side capped and aggregated across both sides for interior beams
 - `is_perimeter`: true when the beam is on the slab perimeter (slab one side only)
 """
 function get_b_eff(L_beam::Real, trib_width_total::Real; is_perimeter::Bool=false)
@@ -158,22 +185,34 @@ end
                               is_perimeter=false)
 
 Effective composite moment of inertia for a beam with spatially varying
-tributary width, computed via virtual-work weighting so that regions of
-high curvature (near midspan) dominate the effective stiffness.
+tributary width, computed as a moment-squared-weighted harmonic mean of
+the local composite `I(x)` so that regions of high curvature (near
+midspan) dominate the effective stiffness.
 
-For a simply-supported beam the virtual moment shape from a unit midspan
-load is M̄(x) = x(L−x)/(2L).  The effective I is defined by
+For a simply-supported beam under a uniformly distributed load the
+applied moment shape is `M(x) ∝ x(L−x)`. The effective I is defined by
 
-    1/I_eff = [∫ M̄(x)²/I(x) dx] / [∫ M̄(x)² dx]
+    1/I_eff = [∫ M(x)²/I(x) dx] / [∫ M(x)² dx]
 
-where I(x) = I_composite at the local tributary width.
+which is the strain-energy-weighted reciprocal stiffness (equivalent to
+a midspan-deflection virtual-work integral up to the difference between
+the applied-moment and unit-load-moment shapes — that difference is
+small and conservative for the typical trib profiles seen here).
 
-**Strip aggregation**: load points at the same beam station (from two
-adjacent cycles) are merged by summing their one-sided tributary widths.
+**Per-side L/8 cap**: each strip carries a *one-sided* tributary width
+from a single cycle. The AISC I3.1a cap is L/8 *per side*, so each strip
+width is capped at L/8 **before** the two-side aggregation. Summing raw
+widths and only capping the total at L/4 would let a wide side
+compensate for a narrow side.
+
+**Strip aggregation**: after per-side capping, load points at the same
+beam station (from two adjacent cycles bounding an interior beam) are
+merged by summing their capped one-sided widths.
 
 **Perimeter beams**: when `is_perimeter=true`, the slab extends only
-on one side, so the AISC single-side cap applies: `b_eff = min(L/8, w)`
-instead of the interior `min(L/4, w)`.
+on one side, so only one cycle contributes a strip per station. The
+L/8 per-side cap is then the controlling limit (`get_b_eff` enforces
+`min(L/8, w)`).
 
 Falls back to bare steel Ix when no load points are supplied.
 
@@ -196,39 +235,66 @@ function get_I_composite_effective(h::Real, w::Real, tw::Real, tf::Real,
     n_raw = length(load_positions)
     n_raw == 0 && return _Ix_I_symm(h, w, tw, tf)
 
-    agg_pos, agg_w = _aggregate_strips(load_positions, trib_widths)
-    n_pts = length(agg_pos)
+    # -------------------------------------------------------------------------
+    # Load-geometry preprocessing.
+    #
+    # `load_positions`, `trib_widths`, and `L_beam` are constants from the
+    # caller's perspective — none depend on the steel section dimensions
+    # (h, w, tw, tf). We therefore hide the whole preprocessing block from
+    # Zygote so the `push!`/`setindex!`/`sortperm` patterns in
+    # `_aggregate_strips` and the neighbour-difference build of `dx` don't
+    # break AD when this function is called from the NLP deflection
+    # constraint. Results returned as `Vector{Float64}` triples.
+    #
+    # Per-side L/8 cap (AISC I3.1a(a)): each strip represents one side's
+    # tributary; capping here enforces the per-side limit, so the total
+    # across two cycles is bounded by L/4 for interior beams. Perimeter
+    # beams carry only one side per station, so the single-side L/8 cap
+    # is controlling.
+    # -------------------------------------------------------------------------
+    agg_w_sorted, M_shape_sq_sorted, dx_sorted = _ad_ignore() do
+        side_cap             = L_beam / 8
+        trib_widths_capped   = min.(trib_widths, side_cap)
+        agg_pos, agg_w_local = _aggregate_strips(load_positions, trib_widths_capped)
+        n_pts_local          = length(agg_pos)
 
-    x_abs = agg_pos .* L_beam
+        x_abs       = agg_pos .* L_beam
+        sp          = sortperm(x_abs)
+        x_sorted    = x_abs[sp]
+        agg_w_s     = agg_w_local[sp]
 
-    M_bar = x_abs .* (L_beam .- x_abs)
+        # Applied-moment shape under a UDL on a simply-supported beam,
+        # pre-squared for the energy weighting used in num/den below.
+        M_sq_s = (x_sorted .* (L_beam .- x_sorted)) .^ 2
 
-    sp = sortperm(x_abs)
-    x_sorted = x_abs[sp]
-
-    dx = zeros(n_pts)
-    if n_pts == 1
-        dx[sp[1]] = L_beam
-    else
-        for (idx, si) in enumerate(sp)
-            if idx == 1
-                dx[si] = (x_sorted[2] - x_sorted[1]) / 2 + x_sorted[1]
-            elseif idx == n_pts
-                dx[si] = (L_beam - x_sorted[end]) + (x_sorted[end] - x_sorted[end-1]) / 2
-            else
-                dx[si] = (x_sorted[idx+1] - x_sorted[idx-1]) / 2
-            end
+        dx_s = if n_pts_local == 1
+            Float64[L_beam]
+        else
+            [
+                (k == 1)            ? (x_sorted[2] - x_sorted[1]) / 2 + x_sorted[1] :
+                (k == n_pts_local)  ? (L_beam - x_sorted[end]) + (x_sorted[end] - x_sorted[end-1]) / 2 :
+                                      (x_sorted[k+1] - x_sorted[k-1]) / 2
+                for k in 1:n_pts_local
+            ]
         end
+
+        return agg_w_s, M_sq_s, dx_s
     end
 
-    I_local = Vector{Float64}(undef, n_pts)
-    for k in 1:n_pts
-        b_eff_k = get_b_eff(L_beam, agg_w[k]; is_perimeter=is_perimeter)
-        I_local[k] = get_I_composite(h, w, tw, tf, t_slab, b_eff_k, E_s, E_c)
-    end
+    n_pts = length(agg_w_sorted)
 
-    num = sum(M_bar[k]^2 * dx[k] for k in 1:n_pts)
-    den = sum(M_bar[k]^2 / I_local[k] * dx[k] for k in 1:n_pts)
+    # -------------------------------------------------------------------------
+    # Gradient-tracked: I_local depends on the section dimensions through
+    # `get_I_composite`. Built as a comprehension (no setindex!) so Zygote
+    # can propagate the pullback back to (h, w, tw, tf).
+    # -------------------------------------------------------------------------
+    I_local = [get_I_composite(h, w, tw, tf, t_slab,
+                               get_b_eff(L_beam, agg_w_sorted[k]; is_perimeter=is_perimeter),
+                               E_s, E_c)
+               for k in 1:n_pts]
+
+    num = sum(M_shape_sq_sorted[k] * dx_sorted[k] for k in 1:n_pts)
+    den = sum(M_shape_sq_sorted[k] / I_local[k] * dx_sorted[k] for k in 1:n_pts)
 
     (num <= 0 || den <= 0) && return _Ix_I_symm(h, w, tw, tf)
     return num / den

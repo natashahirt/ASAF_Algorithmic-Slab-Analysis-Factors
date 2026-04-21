@@ -207,18 +207,50 @@ end
 
 
 """
-    get_element_deflection(params::FrameOptParams, section::I_symm)
+    get_element_deflection(params, vars; material=steel_ksi, dead_load=nothing, Ix_override=nothing)
 
-this is the CORRECT AND DIFFERENTIABLE deflection calculator I REST MY CASE
+Differentiable deflection calculator for a single-section beam optimisation.
+
+The FE solver applies beam self-weight as a distributed load at magnitude
+`dead_load` (kip/in³); by default this falls back to `material.ρ` so the
+returned deflection includes self-weight. Pass `dead_load=0.0` when the
+caller already accounts for self-weight analytically and needs the
+point-load-only deflection (e.g. staged-construction decompositions that
+would otherwise double-count the SW contribution).
+
+# Ix override
+
+Pass `Ix_override` (e.g. the AISC I3.1a transformed-section `I_x`) to
+compute deflections directly on the composite section. When `nothing`,
+bare-steel `Ix_I_symm(vars...)` is used. `A`, `Iy`, `J` always come from
+the bare-steel section — composite action modifies bending stiffness
+only in this formulation (self-weight contribution still uses the
+bare-steel `A` via `dead_load`). This keeps the FE solve faithful to
+AISC I3.1a (transformed-section bending, bare steel for axial / shear
+load transfer) while avoiding the `δ_bare · I_bare/I_comp` scaling
+trick, which can drift from the full single-beam FE under non-uniform
+loading.
+
+# Arguments
+- `params::FrameOptParams`: frame optimisation parameters (indexers, base model)
+- `vars::Vector{Float64}`: `[h, w, tw, tf]` for the I-section
+
+# Keyword arguments
+- `material`: material used to derive density when `dead_load` is not given
+- `dead_load`: explicit SW magnitude override; `nothing` ⇒ use `material.ρ`
+- `Ix_override`: if given, use this `Ix` in place of `Ix_I_symm(vars...)`
+
+# Returns
+- `δ_local::Vector{Float64}`: vertical deflection (in) at each FE node.
 """
-function get_element_deflection(params::FrameOptParams, vars::Vector{Float64}; material::Union{Nothing,AbstractMaterial,Asap.Material}=steel_ksi)
-    # Convert section properties from imperial (in) to metric (cm) units
-
-    # Define variables to hold values
-    A = A_I_symm(vars...) # in² 
-    Ix = Ix_I_symm(vars...) # in⁴
-    Iy = Iy_I_symm(vars...) # in⁴
-    J = J_I_symm(vars...) # in⁴
+function get_element_deflection(params::FrameOptParams, vars::Vector{Float64};
+                                material::Union{Nothing,AbstractMaterial,Asap.Material}=steel_ksi,
+                                dead_load::Union{Real,Nothing}=nothing,
+                                Ix_override::Union{Real,Nothing}=nothing)
+    A  = A_I_symm(vars...)
+    Ix = isnothing(Ix_override) ? Ix_I_symm(vars...) : Ix_override
+    Iy = Iy_I_symm(vars...)
+    J  = J_I_symm(vars...)
 
     param_vars = collect(params.values)
 
@@ -226,13 +258,10 @@ function get_element_deflection(params::FrameOptParams, vars::Vector{Float64}; m
         param_vars = replace_values(param_vars, [4i-3,4i-2,4i-1,4i], [A, Ix, Iy, J])
     end
 
-    results = AsapOptim.solve_frame_Pf(param_vars, params, dead_load = material.ρ) # yes dead load
-    #results = AsapOptim.solve_frame(param_vars, params) # no dead load
+    dl = isnothing(dead_load) ? material.ρ : dead_load
+    results = AsapOptim.solve_frame_Pf(param_vars, params, dead_load=dl)
 
-    δ_local = results.U[3:6:end] # vertical deflection, in
-
-    return δ_local # in
-
+    return results.U[3:6:end]
 end
 
 # Define a function to check if a load is of type PointLoad with a specific subtype of Asap.Release

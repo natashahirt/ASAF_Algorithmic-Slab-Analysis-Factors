@@ -31,6 +31,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
     load_type::Symbol              # :determinate or :indeterminate
     vector_1d::Vector{<:Real}      # Direction of uniaxial slab
     slab_thickness::Real          # Slab thickness [slab length units, typically m]
+    storey_height_m::Real         # Storey height [m], used for column buckling length and volume in `size_columns`
     perp::Bool                    # Whether to use the perpendicular direction
     perp_vector_1d::Vector{<:Real} # Perpendicular direction of orth_biaxial slab
     slab_sizer::Symbol             # :cellular or :uniform
@@ -59,6 +60,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
                               load_type::Symbol=:determinate,
                               vector_1d::Vector{<:Real}=[1.0, 0.0],
                               slab_thickness::Real=0.0,
+                              storey_height_m::Real=4.0,
                               perp::Bool=false,
                               perp_vector_1d::Vector{<:Real}=[0.0, -1.0],
                               slab_sizer::Symbol=:cellular,
@@ -89,7 +91,7 @@ mutable struct SlabAnalysisParams <: AbstractOptParams
         vector_1d = Float64.(vector_1d)
         element_id_lookup_df = get_element_id(model)
 
-        new(model, slab_name, slab_type, load_type, vector_1d, slab_thickness, perp, perp_vector_1d, slab_sizer, fix_param, spacing, area, areas, 
+        new(model, slab_name, slab_type, load_type, vector_1d, slab_thickness, storey_height_m, perp, perp_vector_1d, slab_sizer, fix_param, spacing, area, areas,
             load_areas, load_volumes, load_widths, max_spans, slab_depths, plot_context, load_dictionary, trib_dictionary, record_tributaries, slab_units, raster_df, element_id_lookup_df, i_holes, i_perimeter)
     end
 end
@@ -152,6 +154,10 @@ mutable struct SlabSizingParams
     slab_depth_in::Real              # Slab depth in beam units (in), set during sizing
     deflection_reduction_factor::Real # Divide computed deflection by this before checking limit (e.g. 2.5 for bare steel w/ slab)
     i_perimeter::Set{Int}            # Beam element indices on the slab perimeter (edge beams)
+    partial_composite_factor::Real   # Knockdown on Ix_composite (0–1); 1.0 = fully composite, ~0.85 = partial shear connection / slip / creep
+    serviceability_tighten::Real     # Multiplier (≥1) on the serviceability limit; internal reconciliation loop inflates this
+    reconcile_max_iter::Int          # Max outer iterations to align sizer constraint with postprocess FE
+    reconcile_tol::Real              # Relative tolerance on max δ/Δ before reconciliation stops
 
     # staged deflection Ix floors (populated by outer convergence loop)
     min_Ix_comp::Dict{Int,Float64}   # Per-beam composite Ix lower bound from staged verification
@@ -225,6 +231,10 @@ mutable struct SlabSizingParams
         slab_depth_in::Real=0.0,              # Slab depth (in), populated during sizing
         deflection_reduction_factor::Real=1.0, # Divide computed deflection by this (e.g. 2.5 for bare steel w/ slab)
         i_perimeter::Set{Int}=Set{Int}(),     # Perimeter beam indices, populated during sizing
+        partial_composite_factor::Real=1.0,    # Ix_comp knockdown (0–1); 1.0 = fully composite
+        serviceability_tighten::Real=1.0,      # Internal tightening factor for sizer-postprocess reconciliation
+        reconcile_max_iter::Int=0,             # 0 disables reconciliation; 2–3 is enough in practice
+        reconcile_tol::Real=0.02,              # Accept postprocess δ/Δ_lim ≤ 1 + tol
 
         # staged deflection Ix floors (populated by outer convergence loop)
         min_Ix_comp::Dict{Int,Float64}=Dict{Int,Float64}(),
@@ -248,6 +258,10 @@ mutable struct SlabSizingParams
     )
         @assert (beam_sizer in [:discrete, :continuous]) "Invalid beam sizing method."
         @assert deflection_reduction_factor > 0 "deflection_reduction_factor must be > 0."
+        @assert 0 < partial_composite_factor <= 1 "partial_composite_factor must be in (0, 1]."
+        @assert serviceability_tighten >= 1 "serviceability_tighten must be ≥ 1."
+        @assert reconcile_max_iter >= 0 "reconcile_max_iter must be ≥ 0."
+        @assert reconcile_tol > 0 "reconcile_tol must be > 0."
 
         # High-fidelity policy: when composite stiffness is explicitly modeled, do not
         # also reduce deflection by an empirical factor (avoids double-counting stiffness).
@@ -258,6 +272,7 @@ mutable struct SlabSizingParams
             serviceability_lim, catalog_discrete, n_max_sections, area, w, self_weight, max_beam_depth, M_maxs, V_maxs,
             x_maxs, load_dictionary, load_df, minimizers, minimums, ids, collinear_minimizers, collinear_ids,
             collinear_minimums, collinear_groups, composite_action, E_c, slab_depth_in, drf, i_perimeter,
+            partial_composite_factor, serviceability_tighten, reconcile_max_iter, reconcile_tol,
             min_Ix_comp, min_Ix_bare, max_bay_span, mip_result,
             staged_converged, staged_n_violations, verbose, concrete_material)
     end

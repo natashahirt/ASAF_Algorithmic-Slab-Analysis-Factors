@@ -24,6 +24,6 @@ include("../../SlabDesignFactors/core/_core.jl")
 include("../../SlabDesignFactors/plot/plotting/_plotting.jl")
 include("../../TributaryAreas/TributaryAreas.jl")
 include("../../VariableBeamOptimizer/VariableBeamOptimizer.jl")
-include("../../Projects/_projects.jl")
+# include("../../Projects/_projects.jl")
 
 Pkg.status()

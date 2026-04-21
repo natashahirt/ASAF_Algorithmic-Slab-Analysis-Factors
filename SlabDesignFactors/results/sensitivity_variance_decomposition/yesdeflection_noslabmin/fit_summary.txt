@@ -1,0 +1,25 @@
+Condition       : deflection on · slab-min off
+Source directory: SlabDesignFactors/results/processed_yesdeflection_noslabmin/
+n (observations): 11160
+SS_total        : 2.2592521255534846e7
+
+Model A (flat layout nuisance)
+  layout term   : name
+  SS_residual   : 8.059767667384329e6
+  MSE           : 730.5808255424519
+  R²            : 0.6432550587770367
+  DoF residual  : 11032
+
+Model B (nested layout nuisance)
+  layout terms  : category + category×row + category×col + category×row×col
+  SS_residual   : 8.059767667384329e6
+  MSE           : 730.5808255424519
+  R²            : 0.6432550587770367
+  DoF residual  : 11032
+Response        : total_ec (kgCO₂e/m²)
+Primary result  : anova_eta_squared.csv (flat layout)
+Supplement      : anova_eta_squared_nested_layout.csv
+Nested breakdown: anova_layout_nested_breakdown.csv
+Per-category    : anova_eta_squared_by_category_long.csv
+Per-category    : anova_eta_squared_by_category_wide.csv
+Decision factors: slab_type, slab_sizer, beam_sizer, collinear, max_depth

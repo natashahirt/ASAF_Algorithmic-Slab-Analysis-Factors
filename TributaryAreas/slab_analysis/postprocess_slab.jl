@@ -1,31 +1,38 @@
 """
     postprocess_slab(self, params; check_collinear, resolution, concise)
 
-Post-process beam sizing results: compute mass, embodied carbon, column sizing,
-and staged deflection analysis.
+Post-process beam sizing results: mass, embodied carbon, column sizing,
+and a single-limit composite deflection check.
 
-# Staged deflection (unshored composite construction)
+# Deflection regime (single-limit, transformed-section)
 
-When `params.load_df` contains the decomposed load columns `unfactored_w_live`
-and `unfactored_w_sdl` (added by `get_scaled_model`), **two** FE solves plus
-one analytical term produce the full staged deflection breakdown:
+One FE solve applies the **total unfactored service load** — slab DL +
+SDL + LL (beam self-weight is accounted for analytically on bare Ix) —
+to each beam's **transformed composite section** (AISC 360 §I3.1a,
+`get_I_composite_effective`). The maximum **chord-relative** deflection
+(i.e. `ulocal[2, :]` minus the linear interpolation of its two end-node
+values) is checked against a single limit `L / params.serviceability_lim`
+(default L/360). Chord-relative is the engineering definition of beam
+deflection — absolute `ulocal[2, :]` also carries rigid-body settlement
+from the global frame (e.g. a secondary beam sitting on a flexible
+primary inherits the primary's mid-span settlement), which code limits
+are not intended to penalise.
 
-| Component      | Method             | Stiffness       | Load case      |
-|----------------|--------------------|-----------------|----------------|
-| `δ_slab_dead`  | FE solve A         | Bare steel Ix   | Slab DL        |
-| `δ_beam_dead`  | Analytic 5wL⁴/384EI| Bare steel Ix   | Self-weight    |
-| `δ_sdl`        | FE solve B × ratio | Composite Ix    | SDL + LL split |
-| `δ_live`       | FE solve B × ratio | Composite Ix    | SDL + LL split |
+No staged-construction bookkeeping. No separate L/360-live + L/240-total
+check. When `params.composite_action` is false, the same solve runs on
+bare steel `I_x`.
 
-The combined SDL+LL solve is split by load-weight ratio (linear superposition).
+Per-beam results are stored on the returned `SlabOptimResults`:
+- `δ_total`    — one-solve composite deflection (in)
+- `Δ_limit_total` — `L / serviceability_lim` (in)
+- `δ_total_ok` — boolean pass flag
+- `n_L360_fail`, `i_L360_fail` — number / indices of beams failing the
+  check (labelled "L360" for downstream-script compatibility)
 
-Total deflection: `δ_total = δ_slab_dead + δ_beam_dead + δ_sdl + δ_live`
-
-Deflection limits checked:
-- **L/360** for live load only (`δ_live`)
-- **L/240** for total load (`δ_total`)
-
-Results are stored per beam in the returned `SlabOptimResults`.
+Legacy staged-decomposition fields (`δ_slab_dead`, `δ_beam_dead`,
+`δ_sdl`, `δ_live`, `Δ_limit_live`, `δ_live_ok`, `n_L240_fail`,
+`i_L240_fail`) are populated with zeros / defaults and remain on the
+struct for API compatibility.
 
 # Arguments
 - `self::SlabAnalysisParams`: Slab geometry and load data.
@@ -35,7 +42,7 @@ Results are stored per beam in the returned `SlabOptimResults`.
 - `concise`: Skip force/deflection reporting if true.
 
 # Returns
-- `SlabOptimResults` with mass, carbon, forces, column sizing, and staged deflections.
+- `SlabOptimResults` with mass, carbon, forces, column sizing, deflections.
 """
 function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; check_collinear::Union{Bool, Nothing}=nothing, resolution = 200, concise::Bool=false)
     
@@ -180,10 +187,13 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
             end
             if !isempty(widths_i)
                 is_perim = i in params.i_perimeter
-                Ix_eff = get_I_composite_effective(section.h, section.w, section.tw, section.tf,
+                Ix_full = get_I_composite_effective(section.h, section.w, section.tw, section.tf,
                                          params.slab_depth_in, steel_ksi.E, params.E_c,
                                          L_beam, positions_i, widths_i;
                                          is_perimeter=is_perim)
+                # Partial-composite knockdown (matches the sizer constraint):
+                # Ix_eff = Ix_bare + pcf · (Ix_full − Ix_bare).
+                Ix_eff = section.Ix + params.partial_composite_factor * (Ix_full - section.Ix)
             end
         end
 
@@ -215,134 +225,70 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
 
     # --- Column sizing (uses factored loads, must run before unfactored re-solve) ---
     col_sections, col_Pu, col_ϕPn, col_util, mass_columns, norm_mass_columns, embodied_carbon_columns =
-        size_columns(params.model, self.area)
+        size_columns(params.model, self.area; storey_height_m=self.storey_height_m)
 
     δ_locals = Vector{Vector{Float64}}(undef, n_beams)
     δ_globals = Vector{Vector{Float64}}(undef, n_beams)
 
     # =========================================================================
-    # Staged deflection analysis (unshored composite construction)
+    # Deflection analysis (single-limit, transformed-section)
     #
-    # Physical model — consolidated into 2 FE solves + 1 analytical term:
-    #   Solve A — bare-steel Ix  with slab DL loads
-    #   Solve B — composite  Ix  with SDL + LL (combined), then split by ratio
-    #   Analytic — beam self-weight δ = 5wL⁴/(384EI_bare), added to dead stage
+    #   δ_composite  : FE solve, composite Ix, total unfactored load + SW
+    #   Limit        : L / params.serviceability_lim  (default L/360)
     #
-    # Deflection superposition:
-    #   δ_total = δ_slab_dead + δ_beam_dead + δ_sdl + δ_live
-    #
-    # Limits (IBC / ASCE 7):
-    #   L/360 for live load only  (δ_live)
-    #   L/240 for total load      (δ_total)
+    # No construction-stage bookkeeping: slab DL, SDL, LL, and beam SW are
+    # all applied in one solve to the transformed composite section (AISC
+    # 360 §I3.1a). For bare-steel mode (`composite_action = false`) the
+    # same solve runs against bare Ix.
     # =========================================================================
 
-    δ_slab_dead_vec  = zeros(n_beams)
-    δ_beam_dead_vec  = zeros(n_beams)
-    δ_sdl_vec        = zeros(n_beams)
-    δ_live_vec       = zeros(n_beams)
-    δ_total_vec      = zeros(n_beams)
-    Δ_lim_live_vec   = zeros(n_beams)
-    Δ_lim_total_vec  = zeros(n_beams)
-    δ_live_ok_vec    = fill(true, n_beams)
-    δ_total_ok_vec   = fill(true, n_beams)
+    δ_total_vec     = zeros(n_beams)
+    Δ_lim_vec       = zeros(n_beams)
+    δ_total_ok_vec  = fill(true, n_beams)
 
-    composite_Ix = [beam_elements[i].section.Ix for i in 1:n_beams]
-
-    # Precompute fresh section properties from minimizers for staged FE solves.
-    # beam_elements may carry stale A/Iy/J from a previous call.
+    # Fresh section properties from minimizers (beam_elements may carry
+    # stale A/Iy/J from a previous call).
     fresh_secs = [I_symm(minimizers[i]...) for i in 1:n_beams]
     bare_Ix = [fresh_secs[i].Ix for i in 1:n_beams]
     sec_A   = [fresh_secs[i].A  for i in 1:n_beams]
     sec_Iy  = [fresh_secs[i].Iy for i in 1:n_beams]
     sec_J   = [fresh_secs[i].J  for i in 1:n_beams]
 
-    has_staged_loads = :unfactored_w_live in propertynames(params.load_df)
-
-    if has_staged_loads && !concise
-        E_steel = steel_ksi.E
-        ρ_steel_kip = steel_ksi.ρ
-
-        # --- Solve A: Slab DL on bare steel ---
-        for i in 1:n_beams
-            beam_elements[i].section = Section(sec_A[i], E_steel, steel_ksi.G,
-                bare_Ix[i], sec_Iy[i], sec_J[i])
-        end
-        update_load_values_staged!(params.model, params, load_case=:slab_dead)
-        params.load_dictionary = get_load_dictionary_by_id(params.model)
-        Asap.solve!(params.model, reprocess=true)
-
-        for i in 1:n_beams
-            disp = ElementDisplacements(beam_elements[i],
-                params.load_dictionary[beam_ids[i]], resolution=resolution)
-            δ_slab_dead_vec[i] = maximum(abs.(disp.ulocal[2, :]))
-        end
-
-        # --- Analytical beam self-weight deflection on bare steel ---
-        # δ_beam = 5·w·L⁴ / (384·E·I_bare), simply-supported uniform load
-        # w = A · ρ_steel  [kip/in],  L in inches
-        for i in 1:n_beams
-            w_sw = sec_A[i] * ρ_steel_kip
-            L_in = beam_elements[i].length
-            δ_beam_dead_vec[i] = 5 * w_sw * L_in^4 / (384 * E_steel * bare_Ix[i])
-        end
-
-        # --- Solve B: SDL + LL on composite section (single solve) ---
-        for i in 1:n_beams
-            beam_elements[i].section = Section(sec_A[i], E_steel, steel_ksi.G,
-                composite_Ix[i], sec_Iy[i], sec_J[i])
-        end
-        update_load_values_staged!(params.model, params, load_case=:sdl_live)
-        params.load_dictionary = get_load_dictionary_by_id(params.model)
-        Asap.solve!(params.model, reprocess=true)
-
-        δ_sdl_live_vec = zeros(n_beams)
-        for i in 1:n_beams
-            disp = ElementDisplacements(beam_elements[i],
-                params.load_dictionary[beam_ids[i]], resolution=resolution)
-            δ_sdl_live_vec[i] = maximum(abs.(disp.ulocal[2, :]))
-        end
-
-        # Split combined SDL+LL deflection by load ratio (linear elastic).
-        # SDL and LL produce the same deflection shape (uniform on same beam),
-        # so δ_sdl/δ_sdl_live = w_sdl/(w_sdl + w_live).
+    # Composite (transformed) Ix per beam — falls back to bare Ix when
+    # composite action is disabled or per-beam trib data is missing.
+    composite_Ix = copy(bare_Ix)
+    if params.composite_action && params.slab_depth_in > 0
         loadid_index = _build_loadid_index(params)
+        E_steel_in   = steel_ksi.E
         for i in 1:n_beams
-            w_sdl_sum = 0.0
-            w_live_sum = 0.0
-            for ld in params.load_dictionary[beam_ids[i]]
+            element_loads_i = params.load_dictionary[beam_ids[i]]
+            positions_i = Float64[]
+            widths_i    = Float64[]
+            for ld in element_loads_i
                 if hasproperty(ld, :loadID)
                     row = get(loadid_index, ld.loadID, nothing)
                     if !isnothing(row)
-                        w_sdl_sum  += params.load_df[row, :unfactored_w_sdl]
-                        w_live_sum += params.load_df[row, :unfactored_w_live]
+                        push!(positions_i, ld.position)
+                        push!(widths_i,    params.load_df[row, :trib_width])
                     end
                 end
             end
-            w_total = w_sdl_sum + w_live_sum
-            frac_sdl = w_total > 0 ? w_sdl_sum / w_total : 0.5
-            δ_sdl_vec[i]  = δ_sdl_live_vec[i] * frac_sdl
-            δ_live_vec[i] = δ_sdl_live_vec[i] * (1.0 - frac_sdl)
+            if !isempty(positions_i)
+                is_perim = i in params.i_perimeter
+                L_beam   = beam_elements[i].length
+                hi, wi, twi, tfi = minimizers[i]
+                Ix_full  = get_I_composite_effective(hi, wi, twi, tfi,
+                    params.slab_depth_in, E_steel_in, params.E_c,
+                    L_beam, positions_i, widths_i; is_perimeter=is_perim)
+                # Apply the same partial-composite knockdown used by the
+                # sizer constraint — see `get_deflection_constraint`.
+                composite_Ix[i] = bare_Ix[i] +
+                    params.partial_composite_factor * (Ix_full - bare_Ix[i])
+            end
         end
-
-        # --- Superpose and check limits ---
-        for i in 1:n_beams
-            L = beam_elements[i].length
-            δ_total_vec[i] = δ_slab_dead_vec[i] + δ_beam_dead_vec[i] +
-                             δ_sdl_vec[i] + δ_live_vec[i]
-            Δ_lim_live_vec[i]  = L / 360.0
-            Δ_lim_total_vec[i] = L / 240.0
-            δ_live_ok_vec[i]  = δ_live_vec[i] <= Δ_lim_live_vec[i]
-            δ_total_ok_vec[i] = δ_total_vec[i] <= Δ_lim_total_vec[i]
-        end
-
-        n_live_fail  = count(.!δ_live_ok_vec)
-        n_total_fail = count(.!δ_total_ok_vec)
-        println("Staged deflection: $(n_live_fail) beams exceed L/360 (live), " *
-                "$(n_total_fail) beams exceed L/240 (total)")
     end
 
-    # --- Legacy total-unfactored deflection (Δ_local, Δ_global) ---
-    # Use fresh A/Iy/J from minimizers with composite Ix, unfactored loads.
+    # Apply total unfactored load to the composite (or bare) sections.
     for i in 1:n_beams
         beam_elements[i].section = Section(sec_A[i], steel_ksi.E, steel_ksi.G,
             composite_Ix[i], sec_Iy[i], sec_J[i])
@@ -353,11 +299,53 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
 
     if !concise
         for i in 1:n_beams
-            displacements = ElementDisplacements(beam_elements[i],
+            disp = ElementDisplacements(beam_elements[i],
                 params.load_dictionary[beam_ids[i]], resolution=resolution)
-            δ_locals[i] = displacements.ulocal[2, :]
-            δ_globals[i] = displacements.uglobal[2, :]
+            δ_locals[i]  = disp.ulocal[2, :]
+            δ_globals[i] = disp.uglobal[2, :]
+
+            # Chord-relative deflection — subtract the linear interpolation of
+            # end-node displacements so we isolate the beam's own bending.
+            #
+            # `ulocal[2, :]` from Asap is the *total* transverse displacement
+            # (nodal solve interpolated by Hermite shape functions + particular
+            # solution from loads). When a secondary beam frames onto a flexible
+            # primary, the global solve puts primary-beam settlement into the
+            # secondary's end-node displacements, which then show up as rigid-
+            # body translation/rotation in `ulocal[2, :]`. AISC/IBC L/360 limits
+            # are *relative to the chord between supports*, so we project those
+            # end motions out before taking the max.
+            u_y        = disp.ulocal[2, :]
+            n_pts      = length(u_y)
+            if n_pts >= 2
+                ξ        = range(0.0, 1.0, length=n_pts)
+                u_chord  = u_y[1] .* (1 .- ξ) .+ u_y[end] .* ξ
+                δ_rel    = u_y .- u_chord
+            else
+                δ_rel    = u_y
+            end
+
+            L_in              = beam_elements[i].length
+            δ_total_vec[i]    = maximum(abs.(δ_rel))
+            Δ_lim_vec[i]      = L_in / params.serviceability_lim
+            δ_total_ok_vec[i] = δ_total_vec[i] <= Δ_lim_vec[i]
         end
+        n_fail = count(.!δ_total_ok_vec)
+        # Compute worst-case deflection ratio (δ_actual / δ_limit) across all
+        # beams — the single most useful number for diagnosing how far the
+        # sizer's output is from the postprocess deflection check.
+        ratio_vec = [Δ_lim_vec[i] > 0 ? δ_total_vec[i] / Δ_lim_vec[i] : 0.0
+                     for i in 1:n_beams]
+        max_ratio   = isempty(ratio_vec) ? 0.0 : maximum(ratio_vec)
+        p95_ratio   = isempty(ratio_vec) ? 0.0 :
+                      sort(ratio_vec)[max(1, ceil(Int, 0.95 * n_beams))]
+        max_δ_in    = isempty(δ_total_vec) ? 0.0 : maximum(δ_total_vec)
+        limit_lbl   = Int(round(params.serviceability_lim))
+
+        println("Deflection: $(n_fail) / $(n_beams) beams exceed L/$(limit_lbl)  " *
+                "(max δ = $(round(max_δ_in, digits=3)) in, " *
+                "max δ/Δ_lim = $(round(max_ratio, digits=2)), " *
+                "p95 δ/Δ_lim = $(round(p95_ratio, digits=2)))")
     end
 
     # Restore factored loads so subsequent calls (e.g., collinear postprocessing,
@@ -380,10 +368,12 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
         end
     end
     _max_col_util = isempty(col_util) ? 0.0 : maximum(col_util)
-    _i_L360_fail  = findall(.!δ_live_ok_vec)
-    _i_L240_fail  = findall(.!δ_total_ok_vec)
+    # Single-limit regime: only one failure set (reported as L360 for
+    # downstream-script compatibility).
+    _i_L360_fail  = findall(.!δ_total_ok_vec)
     _n_L360_fail  = length(_i_L360_fail)
-    _n_L240_fail  = length(_i_L240_fail)
+    _i_L240_fail  = Int[]
+    _n_L240_fail  = 0
 
     _max_δ_total  = isempty(δ_total_vec) ? 0.0 : maximum(δ_total_vec)
     _max_bay_span = params.max_bay_span
@@ -392,12 +382,8 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
     _nlp_solver_str = params.beam_sizer == :discrete ? "MIP" : String(params.nlp_solver)
     _strength_ok = _max_util_M <= 1.0 + 1e-3 && _max_util_V <= 1.0 + 1e-3
     _column_ok = isempty(col_util) || _max_col_util <= 1.0 + 1e-3
-    _serviceability_ok = !params.deflection_limit || (
-        _n_L360_fail == 0 &&
-        _n_L240_fail == 0 &&
-        _global_δ_ok &&
-        params.staged_n_violations == 0
-    )
+    _serviceability_ok = !params.deflection_limit ||
+        (_n_L360_fail == 0 && _global_δ_ok)
     _result_ok = self.area > 0 &&
         !isempty(minimizers) &&
         _strength_ok &&
@@ -415,11 +401,8 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
     !_strength_ok && push!(_diag_flags, "strength_fail")
     !_column_ok && push!(_diag_flags, "column_fail")
     !_serviceability_ok && push!(_diag_flags, "serviceability_fail")
-    (_n_L360_fail > 0) && push!(_diag_flags, "l360_fail")
-    (_n_L240_fail > 0) && push!(_diag_flags, "l240_fail")
+    (_n_L360_fail > 0) && push!(_diag_flags, "deflection_fail")
     !_global_δ_ok && push!(_diag_flags, "global_deflection_sanity_fail")
-    !params.staged_converged && push!(_diag_flags, "staged_not_converged")
-    (params.staged_n_violations > 0) && push!(_diag_flags, "staged_violations_remaining")
     isempty(minimizers) && push!(_diag_flags, "no_minimizers")
     (self.area <= 0) && push!(_diag_flags, "no_slab_area")
     _diag_flags = unique(_diag_flags)
@@ -469,14 +452,17 @@ function postprocess_slab(self::SlabAnalysisParams, params::SlabSizingParams; ch
         mass_fireproofing      = fireproofing_mass,
         norm_mass_fireproofing = norm_mass_fireproofing,
         embodied_carbon_fireproofing = embodied_carbon_fireproofing,
-        δ_slab_dead            = δ_slab_dead_vec,
-        δ_beam_dead            = δ_beam_dead_vec,
-        δ_sdl                  = δ_sdl_vec,
-        δ_live                 = δ_live_vec,
+        # Legacy staged-decomposition fields are zeroed under the
+        # single-limit regime; only δ_total / Δ_limit_total / δ_total_ok
+        # are populated.
+        δ_slab_dead            = zeros(n_beams),
+        δ_beam_dead            = zeros(n_beams),
+        δ_sdl                  = zeros(n_beams),
+        δ_live                 = zeros(n_beams),
         δ_total                = δ_total_vec,
-        Δ_limit_live           = Δ_lim_live_vec,
-        Δ_limit_total          = Δ_lim_total_vec,
-        δ_live_ok              = δ_live_ok_vec,
+        Δ_limit_live           = zeros(n_beams),
+        Δ_limit_total          = Δ_lim_vec,
+        δ_live_ok              = fill(true, n_beams),
         δ_total_ok             = δ_total_ok_vec,
         max_δ_total            = _max_δ_total,
         max_bay_span           = _max_bay_span,
@@ -521,11 +507,11 @@ catalog lightest-first, and returns vectors of results.
 Assumes the model is solved with **factored** loads at the time of call (the column
 sizing runs before the unfactored-load serviceability re-solve).
 """
-function size_columns(model::Asap.Model, floor_area::Float64;
-                      storey_height_m::Float64=4.0,
-                      Kx::Float64=1.0, Ky::Float64=1.0,
-                      Lx_m::Float64=storey_height_m,
-                      Ly_m::Float64=storey_height_m)
+function size_columns(model::Asap.Model, floor_area::Real;
+                      storey_height_m::Real=4.0,
+                      Kx::Real=1.0, Ky::Real=1.0,
+                      Lx_m::Real=storey_height_m,
+                      Ly_m::Real=storey_height_m)
     col_elements = try model.elements[:column] catch; Element[] end
     n_cols = length(col_elements)
 
